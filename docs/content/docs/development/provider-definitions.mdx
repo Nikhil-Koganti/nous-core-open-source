@@ -5,15 +5,17 @@ description: Contributor contract for provider metadata definitions
 
 # Provider Definitions
 
-Provider definitions live in `self/subcortex/providers/src/definitions/`. They describe provider metadata in a static typed catalog so contributors can add provider identity, protocol, default endpoint, default model, credential metadata, locality, and capability hints without touching runtime construction logic first.
+Provider definitions live in `self/subcortex/providers/src/definitions/`. They describe provider metadata in a static typed catalog so contributors can add provider identity, protocol, default endpoint, default model, credential metadata, locality, and capability hints without touching bootstrap or provider-construction branches.
+
+The catalog is the source of truth for provider identity during startup. Shared-server bootstrap derives well-known provider IDs, default models, configured-key checks, stored-provider registration, and stored credential loading from `PROVIDER_DEFINITIONS`. The provider registry also uses definitions to resolve vendor behavior and API-key environment variables before constructing provider classes.
 
 The current catalog covers the provider roster:
 
-| Definition | Vendor key | Protocol |
-|------------|------------|----------|
-| `anthropic.ts` | `anthropic` | `anthropic-messages` |
-| `chat-completions.ts` | `openai` | `chat-completions` |
-| `ollama.ts` | `ollama` | `ollama` |
+| Definition | Vendor key | Adapter key | Protocol |
+|------------|------------|-------------|----------|
+| `anthropic.ts` | `anthropic` | `anthropic` | `anthropic-messages` |
+| `chat-completions.ts` | `openai` | `chat-completions` | `chat-completions` |
+| `ollama.ts` | `ollama` | `ollama` | `ollama` |
 
 ## Authoring Pattern
 
@@ -42,6 +44,8 @@ export const EXAMPLE_PROVIDER_DEFINITION = defineProvider({
 
 `defineProvider(...)` validates the definition with the provider-definition Zod schema and preserves literal TypeScript inference. The aggregator exports `PROVIDER_DEFINITIONS`, `ProviderVendorKey`, and `BootstrapProviderKey` from the registered `vendorKey` literals.
 
+Remote providers should set `auth.envVar`, `auth.vaultKeyNamespace`, `auth.required: true`, and `auth.purpose: 'api_key'`. Local providers such as Ollama set `auth.required: false` and omit credential fields. Environment variables take precedence at runtime, and the credential vault is the persisted fallback source for providers with a `vaultKeyNamespace`.
+
 ## Metadata-Only Rule
 
 Definition leaf files are metadata only. They should not:
@@ -69,6 +73,60 @@ Current adapter keys are:
 
 `openai` remains a provider vendor key for the current Chat Completions-backed definition, but it resolves to the canonical `chat-completions` adapter key.
 
+Each adapter module object should be stateless at the module level and return a `ProviderAdapter` from `create(...)`:
+
+```ts
+export const exampleAdapter = defineProviderAdapter({
+  adapterKey: 'example-chat',
+  displayName: 'Example Chat',
+  protocol: 'example-chat',
+  capabilities: {
+    nativeToolUse: false,
+    cacheControl: false,
+    extendedThinking: false,
+    streaming: false,
+  },
+  create() {
+    return {
+      capabilities: this.capabilities,
+      formatRequest(input) {
+        return {
+          input: {
+            system: input.systemPrompt,
+            messages: input.context,
+            tools: input.toolDefinitions ?? [],
+          },
+        };
+      },
+      parseResponse(output) {
+        return {
+          response: String(output ?? ''),
+          toolCalls: [],
+          memoryCandidates: [],
+          contentType: 'text',
+        };
+      },
+    };
+  },
+});
+```
+
+`parseResponse(...)` must not throw. When a provider returns an unexpected shape, return a text fallback so the gateway can continue with a canonical `ParsedModelOutput`.
+
+## Leaf Addition Checklist
+
+For a new provider, add the smallest complete leaf set:
+
+1. Add `self/subcortex/providers/src/definitions/<provider>.ts` with `defineProvider(...)`.
+2. Export the definition from `definitions/index.ts` and include it in `PROVIDER_DEFINITIONS`.
+3. Add or reuse an adapter module in `src/adapters/`.
+4. Export the adapter module from `adapters/index.ts` and include it in `ADAPTER_MODULES`.
+5. Add tests proving definition aggregation, adapter resolution, response parsing, credential handling, and provider construction.
+
+If the provider uses an existing protocol, prefer reusing the existing adapter key. For example, an OpenAI-compatible service that accepts Chat Completions requests can use `adapterKey: 'chat-completions'` while still declaring its own `vendorKey`, endpoint, model, and credential namespace.
+
 ## Current Boundaries
 
-The provider definition catalog and adapter module registry are now provider-package owned. Bootstrap and credential loading are not registry-driven yet; registry-derived bootstrap and credential consumption remain planned follow-up work.
+The provider definition catalog and adapter module registry are provider-package owned. Shared-server bootstrap consumes the catalog but does not own provider metadata. Provider construction remains explicit: definitions select the vendor path, while concrete provider classes still implement runtime behavior.
+
+Adding a definition and adapter makes a provider discoverable to the registry path, but it does not automatically approve the provider for production use. Production additions still need tests, credential review, model-list behavior review when applicable, and documentation updates for any user-facing setup changes.
