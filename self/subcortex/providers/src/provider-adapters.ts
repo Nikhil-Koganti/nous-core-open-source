@@ -1,9 +1,9 @@
 export {
   anthropicAdapter,
   createAnthropicAdapter,
-} from './anthropic-adapter.js';
+} from './adapters/anthropic-adapter.js';
 export {
   createOllamaAdapter,
   isToolCapableModel,
   ollamaAdapter,
-} from './ollama-adapter.js';
+} from './adapters/ollama-adapter.js';

@@ -12,10 +12,10 @@
       "default": "./dist/index.js"
     },
     "./adapters": {
-      "types": "./dist/adapters/index.d.ts",
-      "import": "./dist/adapters/index.js",
-      "require": "./dist/adapters/index.js",
-      "default": "./dist/adapters/index.js"
+      "types": "./dist/provider-adapters.d.ts",
+      "import": "./dist/provider-adapters.js",
+      "require": "./dist/provider-adapters.js",
+      "default": "./dist/provider-adapters.js"
     },
     "./shared": {
       "types": "./dist/shared/index.d.ts",
