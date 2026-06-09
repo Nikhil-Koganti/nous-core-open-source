@@ -50,8 +50,8 @@ describe('provider definition to adapter to registry pipeline', () => {
   it('aggregates all production provider definitions by vendor key', () => {
     expect(PROVIDER_DEFINITIONS.map((definition) => definition.vendorKey)).toEqual([
       'anthropic',
-      'openai',
       'ollama',
+      'openai',
     ]);
     expect(resolveProviderDefinition('anthropic').defaultModelId).toBe(
       'claude-sonnet-4-20250514',

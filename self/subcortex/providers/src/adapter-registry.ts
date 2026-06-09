@@ -1,8 +1,6 @@
 import type { ILogChannel } from '@nous/shared';
 import { PROVIDER_DEFINITIONS } from './provider-definitions.js';
-import { anthropicAdapter } from './adapters/anthropic-adapter.js';
-import { ollamaAdapter } from './adapters/ollama-adapter.js';
-import { chatCompletionsAdapter } from './shared/chat-completions-adapter.js';
+import { CERTIFIED_PROVIDER_ADAPTER_MODULES } from './generated/adapter-modules.generated.js';
 import { textAdapter } from './shared/text-adapter.js';
 import type {
   ProviderAdapter,
@@ -11,9 +9,7 @@ import type {
 } from './shared/adapter-types.js';
 
 export const ADAPTER_MODULES = [
-  anthropicAdapter,
-  chatCompletionsAdapter,
-  ollamaAdapter,
+  ...CERTIFIED_PROVIDER_ADAPTER_MODULES,
   textAdapter,
 ] as const satisfies readonly ProviderAdapterModule[];
 

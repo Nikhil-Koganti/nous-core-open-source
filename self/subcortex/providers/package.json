@@ -43,8 +43,10 @@
     }
   },
   "scripts": {
-    "build": "tsc --build",
-    "typecheck": "pnpm --filter \"@nous/subcortex-providers^...\" exec tsc --build --force && tsc --noEmit",
+    "generate:providers": "node scripts/generate-provider-aggregates.mjs",
+    "check:generated": "node scripts/generate-provider-aggregates.mjs --check",
+    "build": "pnpm run check:generated && tsc --build",
+    "typecheck": "pnpm run check:generated && pnpm --filter \"@nous/subcortex-providers^...\" exec tsc --build --force && tsc --noEmit",
     "clean": "rm -rf dist"
   },
   "dependencies": {

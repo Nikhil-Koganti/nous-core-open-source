@@ -53,8 +53,8 @@ describe('adapter registry', () => {
   it('aggregates all canonical adapter modules', () => {
     expect(ADAPTER_MODULES.map((module) => module.adapterKey)).toEqual([
       'anthropic',
-      'chat-completions',
       'ollama',
+      'chat-completions',
       'text',
     ]);
   });

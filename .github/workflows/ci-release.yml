@@ -36,6 +36,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Check generated provider aggregates
+        run: pnpm run check:generated
+
       - name: Build
         run: pnpm run build
 
