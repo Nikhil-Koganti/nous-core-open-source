@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LaneAwareProvider } from '@nous/subcortex-inference-runtime';
 import { AnthropicProvider } from '../providers/anthropic/implementation.js';
 import { ChatCompletionsProvider } from '../protocols/openai-api/provider.js';
-import { ProviderRegistry } from '../registry/provider-registry.js';
+import { ProviderRegistry } from '../runtime/provider-runtime.js';
 import { OllamaProvider } from '../providers/ollama/implementation.js';
 
 afterEach(() => {

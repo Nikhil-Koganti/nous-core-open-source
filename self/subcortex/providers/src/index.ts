@@ -35,8 +35,8 @@ export {
 } from './shared/text-adapter.js';
 export { OllamaProvider } from './providers/ollama/implementation.js';
 export { ChatCompletionsProvider } from './protocols/openai-api/provider.js';
-export { ProviderRegistry } from './registry/provider-registry.js';
-export type { ProviderRegistryOptions } from './registry/provider-registry.js';
+export { ProviderRegistry } from './runtime/provider-runtime.js';
+export type { ProviderRegistryOptions } from './runtime/provider-runtime.js';
 export {
   InferenceLane,
   InferenceLaneRegistry,

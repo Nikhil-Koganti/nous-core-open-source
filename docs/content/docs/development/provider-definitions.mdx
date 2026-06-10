@@ -7,7 +7,7 @@ description: Contributor contract for provider metadata definitions
 
 Provider definition constants live with their owning provider modules, and the generated `self/subcortex/providers/src/provider-definitions.ts` public catalog aggregates them into a typed roster. Hand-written provider definition contracts live in `self/subcortex/providers/src/schemas/provider-definition.ts`. They describe provider metadata so contributors can add provider identity, protocol, default endpoint, default model, credential metadata, locality, and capability hints without touching bootstrap or provider-construction branches.
 
-The catalog is the source of truth for provider identity during startup. Shared-server bootstrap derives well-known provider IDs, default models, configured-key checks, stored-provider registration, and stored credential loading from `PROVIDER_DEFINITIONS`. The provider registry also uses definitions to resolve vendor behavior and API-key environment variables before constructing provider classes.
+The catalog is the source of truth for provider identity during startup. Shared-server bootstrap derives well-known provider IDs, default models, configured-key checks, stored-provider registration, and stored credential loading from `PROVIDER_DEFINITIONS`. The provider runtime also uses definitions to resolve vendor behavior and API-key environment variables before constructing provider classes.
 
 The current catalog covers the provider roster:
 
@@ -56,7 +56,7 @@ Provider definitions are metadata only. They should not:
 - perform network calls, or
 - contain provider-specific bootstrap branches.
 
-Runtime behavior remains in the concrete provider classes and registry paths. Adding a new production provider still requires explicit review of adapter behavior, credential handling, tests, and bootstrap consumption before it lands.
+Runtime behavior remains in the concrete provider classes and provider runtime paths. Adding a new production provider still requires explicit review of adapter behavior, credential handling, tests, and bootstrap consumption before it lands.
 
 ## Adapter Modules
 
@@ -129,4 +129,4 @@ If the provider uses an existing protocol, prefer reusing the existing adapter k
 
 The provider definition catalog and adapter module registry are provider-package owned. Shared-server bootstrap consumes the catalog but does not own provider metadata. Provider construction remains explicit: definitions select the vendor path, while concrete provider classes still implement runtime behavior.
 
-Adding a definition and adapter makes a provider discoverable to the registry path, but it does not automatically approve the provider for production use. Production additions still need tests, credential review, model-list behavior review when applicable, and documentation updates for any user-facing setup changes.
+Adding a definition and adapter makes a provider discoverable to the runtime path, but it does not automatically approve the provider for production use. Production additions still need tests, credential review, model-list behavior review when applicable, and documentation updates for any user-facing setup changes.
