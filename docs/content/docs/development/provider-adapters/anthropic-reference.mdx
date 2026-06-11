@@ -15,7 +15,7 @@ Use `self/subcortex/providers/src/providers/anthropic/` as the reference leaf fo
 | `implementation.ts` | Owns the provider class, default endpoint/model, credential handling, request execution, streaming, and metadata constant |
 | `adapter.ts` | Exports `providerAdapter`, `anthropicAdapter`, and `createAnthropicAdapter(...)` |
 | `provider.ts` | Exports `providerFactory` for runtime construction |
-| `index.ts` | Re-exports the leaf surface for generator imports |
+| `index.ts` | Re-exports the leaf public surface; required by leaf validation |
 
 ## Definition Shape
 
@@ -33,15 +33,27 @@ The metadata constant uses the typed definition contract:
 export const ANTHROPIC_PROVIDER_DEFINITION = {
   vendorKey: 'anthropic',
   displayName: 'Anthropic',
+  wellKnownProviderId: '10000000-0000-0000-0000-000000000001' as ProviderId,
   providerType: 'text',
   providerClass: 'remote_text',
   protocol: 'anthropic-messages',
   adapterKey: 'anthropic',
+  defaultEndpoint: DEFAULT_ENDPOINT,
+  defaultModelId: DEFAULT_MODEL_ID,
   auth: {
     envVar: 'ANTHROPIC_API_KEY',
     vaultKeyNamespace: 'anthropic',
     required: true,
     purpose: 'api_key',
+  },
+  headers: {
+    'anthropic-version': ANTHROPIC_VERSION,
+  },
+  capabilities: {
+    streaming: true,
+    cacheControl: true,
+    extendedThinking: true,
+    nativeToolUse: true,
   },
   isLocal: false,
 } as const satisfies ProviderDefinition;

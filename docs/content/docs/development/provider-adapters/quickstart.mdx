@@ -36,7 +36,7 @@ self/subcortex/providers/src/providers/<vendor>/
 1. In `definition.ts`, export `providerDefinition`.
 2. In `adapter.ts`, export `providerAdapter`.
 3. In `provider.ts`, export `providerFactory`.
-4. In `index.ts`, re-export the leaf's public exports for generator imports.
+4. In `index.ts`, re-export the leaf's public surface. The generator requires this file as part of leaf validation, but imports `definition.ts`, `adapter.ts`, and `provider.ts` directly.
 5. Keep definitions as metadata only: no environment reads, network calls, concrete provider instantiation, or bootstrap branches.
 
 The definition should use `as const satisfies ProviderDefinition`. The factory should use `as const satisfies ProviderFactoryModule`.
