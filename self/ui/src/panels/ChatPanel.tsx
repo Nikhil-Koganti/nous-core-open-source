@@ -5,12 +5,13 @@ import type { IDockviewPanelProps } from 'dockview-react'
 import { clsx } from 'clsx'
 import { LoaderCircle, Circle } from 'lucide-react'
 import type { ConversationContext, ChatStage } from '../components/shell/types'
-import { useEventSubscription } from '@nous/transport'
+import { useEventSubscription, trpc } from '@nous/transport'
 import type { ThoughtEvent } from '../components/thought'
 import { useCardActionHandler } from '../components/chat/hooks/useCardActionHandler'
 // Side-effect import: registers all 5 card types at module evaluation time
 import '../components/chat/cards/index'
 
+import { MarkdownRenderer } from '../components/chat'
 import { ChatInput } from './chat/ChatInput'
 import { ChatMessageList } from './chat/ChatMessageList'
 import { AmbientTeleprompter } from './chat/AmbientTeleprompter'
@@ -21,6 +22,13 @@ import {
     deriveActiveTraceId,
 } from './chat/inline-thoughts'
 import type { InlineThoughtItem } from './chat/inline-thoughts'
+// SP 1.9 Item 1 — local-overlay reducer + history translator (ratified).
+import {
+    mergeHistoryWithOverlay,
+    overlayKeyForOptimisticSend,
+    type LocalOverlayEntry,
+} from './chat/merge-overlay'
+import { translateHistoryEntries } from './chat/translate-history'
 
 // Re-export types so existing consumers don't break
 export type { ChatMessage, ActionResult, ChatAPI } from './chat/types'
@@ -42,10 +50,14 @@ export interface ChatPanelCoreProps {
     onInputFocus?: () => void
     onUnreadMessage?: () => void
     onMessagesRead?: () => void
+    /** SP 1.9 Item 1 — required for `chat.getHistory.useQuery` enablement. */
+    projectId?: string
+    /** SP 1.9 Item 1 — narrows the history scope to a specific session. */
+    sessionId?: string
 }
 
 interface ChatPanelDockviewProps extends IDockviewPanelProps {
-    params: { chatApi?: ChatAPI }
+    params: { chatApi?: ChatAPI; projectId?: string; sessionId?: string }
 }
 
 type ChatPanelProps = ChatPanelDockviewProps | ChatPanelCoreProps
@@ -55,6 +67,9 @@ function resolveProps(props: ChatPanelProps) {
     const isDockview = 'params' in props
     return {
         chatApi: isDockview ? props.params?.chatApi : props.chatApi,
+        // SP 1.9 Item 1 — projectId/sessionId surface from both prop shapes.
+        projectId: isDockview ? props.params?.projectId : props.projectId,
+        sessionId: isDockview ? props.params?.sessionId : props.sessionId,
         className: isDockview ? undefined : props.className,
         stage: (isDockview ? undefined : props.stage) ?? 'full' as ChatStage,
         onStageChange: isDockview ? undefined : props.onStageChange,
@@ -94,17 +109,64 @@ const INLINE_BUFFER_MAX = 200
 // ---------------------------------------------------------------------------
 
 export function ChatPanel(props: ChatPanelProps) {
-    const { chatApi, className, stage, onSendStart, onInputFocus, onUnreadMessage, onMessagesRead } = resolveProps(props)
+    const { chatApi, projectId, sessionId, className, stage, onSendStart, onInputFocus, onUnreadMessage, onMessagesRead } = resolveProps(props)
 
     // --- Core state ---
-    const [messages, setMessages] = useState<ChatMessage[]>([])
+    // SP 1.9 Item 1 (Invariant D) — `localOverlay` is the SOLE UI-only state
+    // surface for entries not yet reflected in `historyQuery.data`. Replaces
+    // the SP 1.8 `useState<ChatMessage[]>` parallel list (Invariant H —
+    // old path deleted in same PR). Both optimistic-send and card-outcome
+    // flow through this single overlay; `mergedMessages` (memo below) is the
+    // render source of truth.
+    const [localOverlay, setLocalOverlay] = useState<readonly LocalOverlayEntry[]>([])
     const [input, setInput] = useState('')
     const [sending, setSending] = useState(false)
+    const [queuedMessages, setQueuedMessages] = useState<string[]>([])
     const [historyError, setHistoryError] = useState<string | null>(null)
+
+    // --- SP 1.9 Item 1 — useQuery subscription for chat.getHistory ---
+    // Per Item 1 ratified decision (Q-SDS-1): exact options shape — gated on
+    // `projectId != null`; `placeholderData: prev` to avoid render flicker
+    // on refetch; `staleTime: 0` so any invalidate (welcome-trigger Fix #6,
+    // useChatApi.send) drives a refetch; `refetchOnMount: true` so panel
+    // remounts re-load history (Goals C12 — welcome persists across remount).
+    const historyQuery = trpc.chat.getHistory.useQuery(
+        { projectId: projectId ?? undefined, sessionId: sessionId ?? undefined },
+        {
+            enabled: projectId != null,
+            placeholderData: (prev) => prev,
+            staleTime: 0,
+            refetchOnMount: true,
+            refetchOnWindowFocus: false,
+            refetchOnReconnect: true,
+        },
+    )
+
+    const serverEntries = useMemo(
+        () => translateHistoryEntries((historyQuery.data?.entries ?? []) as Parameters<typeof translateHistoryEntries>[0]),
+        [historyQuery.data],
+    )
+
+    const mergedMessages = useMemo(
+        () => mergeHistoryWithOverlay(serverEntries, localOverlay),
+        [serverEntries, localOverlay],
+    )
 
     // --- Unread response badge ---
     const [hasUnread, setHasUnread] = useState(false)
     const prevMessageCountRef = useRef(0)
+    // SP 1.9 Item 1 — pre-set `prevMessageCountRef` on first non-empty render
+    // so the unread-detection effect doesn't treat the initial history load
+    // as a new assistant message. Replaces the imperative-fetch pre-set
+    // that lived inside the deleted `useEffect([chatApi])` block.
+    const initialHistorySeededRef = useRef(false)
+    useEffect(() => {
+        if (initialHistorySeededRef.current) return
+        if (!historyQuery.isSuccess) return
+        if (mergedMessages.length === 0) return
+        prevMessageCountRef.current = mergedMessages.length
+        initialHistorySeededRef.current = true
+    }, [historyQuery.isSuccess, mergedMessages.length])
 
     // --- Inline thought items (filtered, prose-style) ---
     const [inlineThoughts, setInlineThoughts] = useState<InlineThoughtItem[]>([])
@@ -129,8 +191,8 @@ export function ChatPanel(props: ChatPanelProps) {
 
     // --- Derived thought groupings ---
     const assistantTraceIds = useMemo(
-        () => new Set(messages.filter(m => m.traceId).map(m => m.traceId!)),
-        [messages],
+        () => new Set(mergedMessages.filter(m => m.traceId).map(m => m.traceId!)),
+        [mergedMessages],
     )
     const thoughtsByTrace = useMemo(
         () => groupThoughtsByTrace(inlineThoughts),
@@ -141,6 +203,32 @@ export function ChatPanel(props: ChatPanelProps) {
         [inlineThoughts, assistantTraceIds],
     )
 
+    // --- Streaming content buffer (progressive rendering) ---
+    const [streamingContent, setStreamingContent] = useState('')
+    const [streamingThinking, setStreamingThinking] = useState('')
+
+    useEventSubscription({
+        channels: ['chat:content-chunk'],
+        onEvent: (_channel, payload) => {
+            const p = payload as { content: string }
+            if (p.content) {
+                setStreamingContent(prev => prev + p.content)
+            }
+        },
+        enabled: sending,
+    })
+
+    useEventSubscription({
+        channels: ['chat:thinking-chunk'],
+        onEvent: (_channel, payload) => {
+            const p = payload as { content: string }
+            if (p.content) {
+                setStreamingThinking(prev => prev + p.content)
+            }
+        },
+        enabled: sending,
+    })
+
     // --- Agent activity tracking (sidebar modes only) ---
     const isSmall = stage === 'small'
     const trackActivity = !('params' in props) && !isSmall
@@ -148,15 +236,15 @@ export function ChatPanel(props: ChatPanelProps) {
 
     // Mark unread when a new assistant message arrives outside full stage
     useEffect(() => {
-        if (messages.length > prevMessageCountRef.current) {
-            const latest = messages[messages.length - 1]
+        if (mergedMessages.length > prevMessageCountRef.current) {
+            const latest = mergedMessages[mergedMessages.length - 1]
             if (latest?.role === 'assistant' && stage !== 'full') {
                 setHasUnread(true)
                 onUnreadMessage?.()
             }
         }
-        prevMessageCountRef.current = messages.length
-    }, [messages, stage, onUnreadMessage])
+        prevMessageCountRef.current = mergedMessages.length
+    }, [mergedMessages, stage, onUnreadMessage])
 
     // Clear unread when the user opens full view
     useEffect(() => {
@@ -167,53 +255,177 @@ export function ChatPanel(props: ChatPanelProps) {
     }, [stage, hasUnread, onMessagesRead])
 
     // --- Card actions ---
-    const handleCardAction = useCardActionHandler({ chatApi: chatApi ?? {}, setMessages })
+    // SP 1.9 Item 1 — `setLocalOverlay` + `messages: mergedMessages` replaces
+    // the SP 1.8 `setMessages` parallel-list mutation (Invariant H).
+    const handleCardAction = useCardActionHandler({
+        chatApi: chatApi ?? {},
+        setLocalOverlay,
+        messages: mergedMessages,
+    })
 
-    // --- History fetch ---
+    // --- History error surface (replaces the deleted imperative fetch's
+    // catch branch). Watches `historyQuery.isError`; sets the same error
+    // string the deleted catch produced. ---
     useEffect(() => {
-        if (chatApi?.getHistory) {
-            chatApi.getHistory().then((history) => {
-                // Pre-set the count so the unread-detection effect doesn't
-                // treat the initial history load as a new assistant message.
-                prevMessageCountRef.current = history.length
-                setMessages(history)
-            }).catch(() => {
-                setHistoryError('Could not load previous messages.')
-            })
+        if (historyQuery.isError) {
+            setHistoryError('Could not load previous messages.')
+        } else if (historyError != null) {
+            setHistoryError(null)
         }
-    }, [chatApi])
+        // Intentionally exclude `historyError` to avoid loop oscillation —
+        // we only clear it when the query stops being errored.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [historyQuery.isError])
+
+    // SP 1.9 Item 1 — overlay-prune useEffect. When server entries arrive
+    // that match an optimistic-send overlay entry (content + role + ±10s
+    // timestamp window), drop the overlay entry. Card-outcome entries
+    // survive in the overlay until panel unmount.
+    //
+    // Returns the previous overlay reference unchanged when nothing is
+    // pruned — important for stable render identity and to avoid an
+    // infinite render loop when `serverEntries` is recomputed on every
+    // render (e.g., test fixtures returning a new `data` object literal).
+    useEffect(() => {
+        setLocalOverlay((prev) => {
+            const next = prev.filter((o) => {
+                if (o.kind === 'card-outcome') return true
+                return !serverEntries.some(
+                    (e) =>
+                        e.role === o.message.role &&
+                        e.content === o.message.content &&
+                        Math.abs(Date.parse(e.timestamp) - Date.parse(o.message.timestamp)) < 10_000,
+                )
+            })
+            return next.length === prev.length ? prev : next
+        })
+    }, [serverEntries])
 
     // --- Send ---
-    const send = async () => {
-        if (!input.trim() || sending || !chatApi?.send) return
-        const userMsg = input.trim()
-        setInput('')
+
+    // invoke() performs the actual chatApi.send call. Shared by:
+    //   - immediate-send path (called from send() when no turn is in flight)
+    //   - drain path (called from the queue-drain effect after a turn ends)
+    // The skipUserAppend flag suppresses the user-message overlay push in
+    // the drain path because the enqueue path already pushed it.
+    //
+    // SP 1.9 Item 1 — assistant-side reconciliation no longer needs an
+    // explicit setMessages(prev => [...prev, assistant]) call: the
+    // `useChatApi.send` invalidate at transport/src/hooks/useChatApi.ts:60-64
+    // fires `utils.chat.getHistory.invalidate(...)` after the server-side
+    // STM append, which drives the useQuery refetch above (staleTime: 0).
+    // The optimistic-send overlay entry is pruned by the prune effect when
+    // the matching server entry appears.
+    const invoke = async (userMsg: string, skipUserAppend = false) => {
         setSending(true)
         onSendStart?.()
 
-        const userEntry: ChatMessage = { role: 'user', content: userMsg, timestamp: new Date().toISOString() }
-        setMessages(prev => [...prev, userEntry])
+        if (!skipUserAppend) {
+            const userEntry: ChatMessage = { role: 'user', content: userMsg, timestamp: new Date().toISOString() }
+            setLocalOverlay((prev) => [
+                ...prev,
+                {
+                    kind: 'optimistic-send',
+                    message: userEntry,
+                    key: overlayKeyForOptimisticSend(userEntry),
+                    issuedAt: Date.now(),
+                },
+            ])
+        }
 
         try {
-            const result = await chatApi.send(userMsg)
-            setMessages(prev => [...prev, {
-                role: 'assistant',
-                content: result.response,
-                timestamp: new Date().toISOString(),
-                traceId: result.traceId,
-                contentType: result.contentType,
-                thinkingContent: result.thinkingContent,
-            }])
+            await chatApi!.send(userMsg)
+            // Reconcile: authoritative response replaces streaming buffer.
+            // The assistant entry arrives via the useQuery refetch driven by
+            // the useChatApi.send invalidate (Invariant E preserved).
+            setStreamingContent('')
+            setStreamingThinking('')
         } catch {
-            setMessages(prev => [...prev, {
+            const errEntry: ChatMessage = {
                 role: 'assistant',
                 content: 'Error: could not reach Nous.',
                 timestamp: new Date().toISOString(),
-            }])
+            }
+            setLocalOverlay((prev) => [
+                ...prev,
+                {
+                    kind: 'optimistic-send',
+                    message: errEntry,
+                    key: overlayKeyForOptimisticSend(errEntry),
+                    issuedAt: Date.now(),
+                },
+            ])
         } finally {
             setSending(false)
         }
     }
+
+    // send() is the input-event entry point. Dispatches to either:
+    //   - enqueue (if a turn is currently in flight: sending=true)
+    //   - immediate invoke (if idle)
+    // Both paths share the !input.trim() and !chatApi?.send guards.
+    const send = () => {
+        if (!input.trim() || !chatApi?.send) return
+        const userMsg = input.trim()
+        setInput('')
+
+        if (sending) {
+            // Enqueue — FIFO order preserved by array push at tail. The
+            // queued entry surfaces in the overlay tagged with `queued: true`
+            // so the message list can render the queue badge.
+            setQueuedMessages(prev => [...prev, userMsg])
+            const queuedEntry: ChatMessage = {
+                role: 'user',
+                content: userMsg,
+                timestamp: new Date().toISOString(),
+                queued: true,
+            }
+            setLocalOverlay((prev) => [
+                ...prev,
+                {
+                    kind: 'optimistic-send',
+                    message: queuedEntry,
+                    key: overlayKeyForOptimisticSend(queuedEntry),
+                    issuedAt: Date.now(),
+                },
+            ])
+            return
+        }
+
+        invoke(userMsg)
+    }
+
+    // Queue drain: fires on the sending: true → false transition.
+    // Pops the FIFO head of queuedMessages, clears the queued flag on the
+    // matching overlay entry, and invokes the pop'd message via the shared
+    // invoke() helper with skipUserAppend=true.
+    useEffect(() => {
+        if (sending || queuedMessages.length === 0) return
+        const [next, ...rest] = queuedMessages
+        setQueuedMessages(rest)
+        // Clear the queued flag on the oldest queued user-message overlay
+        // entry (FIFO). Re-keys the overlay entry with the un-queued shape
+        // so the dedup helper can match it against the eventual server entry.
+        setLocalOverlay((prev) => {
+            const idx = prev.findIndex(
+                (o) => o.kind === 'optimistic-send' && o.message.role === 'user' && o.message.queued,
+            )
+            if (idx < 0) return prev
+            const target = prev[idx]
+            if (target.kind !== 'optimistic-send') return prev
+            const { queued: _queued, ...unqueued } = target.message
+            const updated: LocalOverlayEntry = {
+                kind: 'optimistic-send',
+                message: unqueued as ChatMessage,
+                key: overlayKeyForOptimisticSend(unqueued as ChatMessage),
+                issuedAt: target.issuedAt,
+            }
+            const copy = prev.slice()
+            copy[idx] = updated
+            return copy
+        })
+        invoke(next, true)
+    }, [sending, queuedMessages])
 
     // --- Input focus/blur forwarding ---
     const handleFocus = useCallback(() => {
@@ -238,7 +450,7 @@ export function ChatPanel(props: ChatPanelProps) {
     )
 
     // --- Visible messages (ambient_large caps at 5 for performance) ---
-    const visibleMessages = stage === 'ambient_large' ? messages.slice(-5) : messages
+    const visibleMessages = stage === 'ambient_large' ? mergedMessages.slice(-5) : mergedMessages
 
     // --- Ambient gradient (shared across both ambient stages) ---
     const isAmbient = stage === 'ambient_small' || stage === 'ambient_large'
@@ -318,6 +530,21 @@ export function ChatPanel(props: ChatPanelProps) {
                             activeTraceId={activeTraceId}
                             onCardAction={handleCardAction}
                         />
+                        {sending && (streamingThinking || streamingContent) && (
+                            <div style={styles.streamingPreview}>
+                                {streamingThinking && (
+                                    <details open style={styles.streamingThinkingDetails}>
+                                        <summary style={styles.streamingThinkingSummary}>Thinking…</summary>
+                                        <div style={styles.streamingThinkingBody}>
+                                            <MarkdownRenderer content={streamingThinking} />
+                                        </div>
+                                    </details>
+                                )}
+                                {streamingContent && (
+                                    <MarkdownRenderer content={streamingContent} />
+                                )}
+                            </div>
+                        )}
                     </div>
                     {inputSection}
                 </div>
@@ -381,5 +608,31 @@ const styles = {
     },
     spinnerIcon: {
         animation: 'spin 1s linear infinite',
+    },
+    streamingPreview: {
+        padding: 'var(--nous-space-sm) 0',
+        opacity: 0.8,
+        borderLeft: '2px solid var(--nous-accent)',
+        paddingLeft: 'var(--nous-space-md)',
+    },
+    streamingThinkingDetails: {
+        maxWidth: '100%',
+        borderRadius: 'var(--nous-radius-md)',
+        border: '1px solid var(--nous-border)',
+        background: 'var(--nous-surface-nested)',
+        marginBottom: 'var(--nous-space-sm)',
+        fontSize: 'var(--nous-font-size-xs)',
+    },
+    streamingThinkingSummary: {
+        cursor: 'pointer',
+        padding: 'var(--nous-space-sm) var(--nous-space-md)',
+        fontFamily: 'var(--nous-font-family-mono)',
+        color: 'var(--nous-fg-muted)',
+        userSelect: 'none' as const,
+    },
+    streamingThinkingBody: {
+        padding: '0 var(--nous-space-md) var(--nous-space-sm)',
+        color: 'var(--nous-fg-subtle)',
+        lineHeight: '1.5',
     },
 } as const

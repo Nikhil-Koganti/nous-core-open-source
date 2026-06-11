@@ -72,6 +72,16 @@ export const ContentRouteSchema = z.object({
 })
 export type ContentRoute = z.infer<typeof ContentRouteSchema>
 
+export const WorkspaceRouteParamsSchema = z.record(z.string(), z.unknown()).optional()
+
+export const WorkspaceRouteIdentitySchema = z.object({
+  routeId: z.string().min(1),
+  label: z.string().min(1),
+  surface: z.enum(['project', 'chat', 'workspace']),
+  params: WorkspaceRouteParamsSchema,
+})
+export type WorkspaceRouteIdentity = z.infer<typeof WorkspaceRouteIdentitySchema>
+
 export interface NavigationState {
   activeRoute: string
   history: string[]
@@ -185,6 +195,10 @@ export interface ChatSurfaceProps {
   onInputFocus?: () => void
   onUnreadMessage?: () => void
   onMessagesRead?: () => void
+  /** SP 1.9 Fix #7 — forwarded to ChatPanel's `chat.getHistory.useQuery`. */
+  projectId?: string
+  /** SP 1.9 Fix #7 — forwarded to ChatPanel's `chat.getHistory.useQuery`. */
+  sessionId?: string
 }
 
 /** Props for the HomeScreen landing surface */

@@ -78,6 +78,18 @@ pnpm install
 pnpm build
 ```
 
+### A note on private submodules
+
+This repo references four private submodules under `.architecture/`, `.worklog/`, `.skills/`, and `.opencode/`. They contain internal design documents, sprint working artifacts, SOP/process recipes, and the OpenCode harness adapter — the "code open, recipes private" stance.
+
+For **public clones**, these submodule paths will return 404 on `git submodule update --init`. **This is expected.** The repo functions standalone — every public-facing surface (`AGENTS.md`, build, test, CI) has a conditional that detects whether the private clones are present and degrades gracefully when they are not. You do not need to initialize the submodules to build or run Nous from a public clone.
+
+For **internal contributors with access**, initialize the submodules after cloning:
+
+```bash
+git submodule update --init --recursive
+```
+
 Run the web interface:
 ```bash
 pnpm dev:web
@@ -124,6 +136,8 @@ All code lives under `self/`, organized by cognitive layer.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution tier system, where to start, and how to navigate the codebase.
+
+Model provider adapter contributors should start with the provider adapter docs in `docs/content/docs/development/provider-adapters/` and the Anthropic reference leaf at `self/subcortex/providers/src/providers/anthropic/`.
 
 **Issues**: Check the issue tracker for `good-first-issue` labels — real, scoped tasks at the integration layer.
 
