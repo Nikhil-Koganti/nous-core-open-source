@@ -117,6 +117,28 @@ describe('SystemStatusPage', () => {
       getSystemStatus: vi.fn().mockResolvedValue({
         ollama: { running: true, models: ['llama3'] },
         configuredProviders: ['anthropic'],
+        providerConnections: [
+          {
+            provider: 'anthropic',
+            displayName: 'Anthropic',
+            authKind: 'api_key',
+            configured: true,
+            selectable: true,
+            status: 'ready',
+            message: 'API key is configured.',
+          },
+          {
+            provider: 'codex-cli',
+            displayName: 'Codex CLI',
+            authKind: 'local_session',
+            configured: false,
+            selectable: true,
+            status: 'not_checked',
+            message: 'Uses the local Codex CLI login session; run `codex login` outside Nous.',
+            setupCommand: 'npm install -g @openai/codex',
+            versionCommand: 'codex --version',
+          },
+        ],
         credentialVaultHealthy: true,
       }),
     }
@@ -130,10 +152,16 @@ describe('SystemStatusPage', () => {
     expect(el).not.toBeNull()
     expect(container.textContent).toContain('Running')
     expect(container.textContent).toContain('Anthropic')
+    expect(container.textContent).toContain('Provider Connections')
+    expect(container.textContent).toContain('Codex CLI')
+    expect(container.textContent).toContain('Local session')
+    expect(container.textContent).toContain('Not checked')
+    expect(container.textContent).toContain('codex login')
+    expect(container.textContent).toContain('npm install -g @openai/codex')
     expect(container.textContent).toContain('Healthy')
   })
 
-  it('shows Not running when Ollama is down', async () => {
+  it('shows Not running when Ollama is down and falls back to configured providers', async () => {
     const api = {
       getSystemStatus: vi.fn().mockResolvedValue({
         ollama: { running: false, models: [] },
@@ -148,6 +176,8 @@ describe('SystemStatusPage', () => {
     })
 
     expect(container.textContent).toContain('Not running')
+    expect(container.textContent).toContain('Active Providers')
+    expect(container.textContent).toContain('None')
     expect(container.textContent).toContain('Unavailable')
   })
 })
@@ -275,7 +305,15 @@ describe('ModelConfigPage', () => {
       models: [
         { id: 'claude-3', name: 'Claude 3', provider: 'anthropic', providerLabel: 'Anthropic', available: true },
         { id: 'gpt-4', name: 'GPT-4', provider: 'openai', providerLabel: 'OpenAI', available: true },
-        { id: 'codex-cli:codex-cli/default', name: 'Codex CLI (default)', provider: 'codex-cli', providerLabel: 'Codex CLI', available: true },
+        {
+          id: 'codex-cli:codex-cli/default',
+          name: 'Codex CLI (default)',
+          provider: 'codex-cli',
+          providerLabel: 'Codex CLI',
+          available: true,
+          authKind: 'local_session',
+          availabilityReason: 'Uses the local Codex CLI login session; run `codex login` outside Nous.',
+        },
       ],
     }),
     getRoleAssignments: vi.fn().mockResolvedValue([]),
@@ -324,6 +362,7 @@ describe('ModelConfigPage', () => {
 
     expect(codexGroups).toHaveLength(4)
     expect(codexOptions).toHaveLength(4)
+    expect(codexOptions[0].textContent).toContain('local session required')
   })
 
   it('save button calls api.setRoleAssignment for cortex-chat', async () => {

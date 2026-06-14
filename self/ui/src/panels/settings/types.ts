@@ -27,9 +27,31 @@ export interface OllamaInfo {
   models: string[]
 }
 
+export type ProviderConnectionStatus =
+  | 'ready'
+  | 'missing_credentials'
+  | 'not_running'
+  | 'not_checked'
+  | 'unavailable'
+
+export type ProviderAuthKind = 'api_key' | 'local_session' | 'none' | 'custom'
+
+export interface ProviderConnection {
+  provider: string
+  displayName: string
+  authKind: ProviderAuthKind
+  configured: boolean
+  selectable: boolean
+  status: ProviderConnectionStatus
+  message?: string
+  setupCommand?: string
+  versionCommand?: string
+}
+
 export interface SystemStatus {
   ollama: OllamaInfo
   configuredProviders: string[]
+  providerConnections?: ProviderConnection[]
   credentialVaultHealthy: boolean
 }
 
@@ -49,6 +71,8 @@ export interface AvailableModel {
   provider: string
   providerLabel?: string
   available: boolean
+  authKind?: ProviderAuthKind
+  availabilityReason?: string
 }
 
 export interface RoleAssignmentDisplayEntry {

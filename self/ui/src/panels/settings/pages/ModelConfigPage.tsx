@@ -40,6 +40,14 @@ function optgroupLabel(provider: string, models: AvailableModel[]): string {
   return models[0]?.providerLabel ?? provider.charAt(0).toUpperCase() + provider.slice(1)
 }
 
+function modelOptionLabel(model: AvailableModel): string {
+  if (model.authKind === 'local_session') {
+    return `${model.name} (local session required)`
+  }
+
+  return model.name
+}
+
 export function ModelConfigPage({ api }: ModelConfigPageProps) {
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([])
   const [currentValues, setCurrentValues] = useState<RoleValues>(emptyRoleValues)
@@ -151,7 +159,7 @@ export function ModelConfigPage({ api }: ModelConfigPageProps) {
                   <optgroup key={provider} label={optgroupLabel(provider, models)}>
                     {models.filter((m) => m.available).map((m) => (
                       <option key={m.id} value={m.id}>
-                        {m.name}
+                        {modelOptionLabel(m)}
                       </option>
                     ))}
                   </optgroup>

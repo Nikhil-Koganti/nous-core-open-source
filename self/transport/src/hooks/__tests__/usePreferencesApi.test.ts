@@ -121,6 +121,34 @@ describe('usePreferencesApi', () => {
       expect(data).toEqual(mockData)
     })
 
+    it('getSystemStatus preserves provider connection rows', async () => {
+      const mockData = {
+        ollama: { running: false, models: [] },
+        configuredProviders: [],
+        credentialVaultHealthy: true,
+        providerConnections: [
+          {
+            provider: 'codex-cli',
+            displayName: 'Codex CLI',
+            authKind: 'local_session',
+            configured: false,
+            selectable: true,
+            status: 'not_checked',
+            message: 'Uses the local Codex CLI login session; run `codex login` outside Nous.',
+            setupCommand: 'npm install -g @openai/codex',
+            versionCommand: 'codex --version',
+          },
+        ],
+      }
+      mockFetch.getSystemStatus.mockResolvedValueOnce(mockData)
+
+      const { result } = renderHook(() => usePreferencesApi())
+      const data = await result.current.getSystemStatus()
+
+      expect(mockFetch.getSystemStatus).toHaveBeenCalledOnce()
+      expect(data).toEqual(mockData)
+    })
+
     it('getAvailableModels calls utils.preferences.getAvailableModels.fetch', async () => {
       const mockData = { models: [{ id: 'm1', name: 'Model 1', provider: 'openai', available: true }] }
       mockFetch.getAvailableModels.mockResolvedValueOnce(mockData)

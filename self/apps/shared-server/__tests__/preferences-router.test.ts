@@ -10,6 +10,8 @@ const CODEX_CLI_DEFAULT_MODEL = {
   provider: 'codex-cli',
   providerLabel: 'Codex CLI',
   available: true,
+  authKind: 'local_session',
+  availabilityReason: 'Uses the local Codex CLI login session; run `codex login` outside Nous.',
 };
 const providerDefinitionsMock = vi.hoisted(() => ({
   PROVIDER_DEFINITIONS: [
@@ -49,7 +51,17 @@ const providerDefinitionsMock = vi.hoisted(() => ({
       capabilities: { streaming: false },
       isLocal: true,
       agentCli: {
-        auth: { kind: 'local_session' },
+        install: {
+          command: 'npm install -g @openai/codex',
+          packageName: '@openai/codex',
+          versionCommand: 'codex --version',
+          minimumVersion: '0.137.0',
+          notes: 'Codex CLI must be installed and authenticated locally before use.',
+        },
+        auth: {
+          kind: 'local_session',
+          description: 'Uses the local Codex CLI login session; run `codex login` outside Nous.',
+        },
       },
     },
     {
@@ -448,6 +460,114 @@ describe('preferences router', () => {
         'anthropic',
         'openai',
       ]);
+    });
+  });
+
+  describe('getSystemStatus', () => {
+    it('returns provider connection rows for API-key, Ollama, and Codex CLI providers', async () => {
+      const { ctx, credentialVaultService } = createMockContext();
+      const preferencesRouter = await loadPreferencesRouter();
+      const caller = preferencesRouter.createCaller(ctx);
+      const fetchMock = vi.mocked(globalThis.fetch);
+
+      detectOllamaMock.mockResolvedValueOnce({
+        installed: true,
+        running: true,
+        state: 'running',
+        models: ['llama3.2:3b'],
+        defaultModel: 'llama3.2:3b',
+      });
+
+      await credentialVaultService.store(SYSTEM_APP_ID, {
+        key: vaultKey('anthropic'),
+        value: 'sk-ant-status',
+        credential_type: 'api_key',
+        target_host: 'api.anthropic.com',
+        injection_location: 'header',
+        injection_key: 'x-api-key',
+      });
+
+      const result = await caller.getSystemStatus();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result.ollama).toEqual({
+        running: true,
+        models: ['llama3.2:3b'],
+      });
+      expect(result.configuredProviders).toEqual(['anthropic']);
+      expect(result.providerConnections).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: 'anthropic',
+            displayName: 'Anthropic',
+            authKind: 'api_key',
+            configured: true,
+            selectable: true,
+            status: 'ready',
+          }),
+          expect.objectContaining({
+            provider: 'openai',
+            displayName: 'OpenAI',
+            authKind: 'api_key',
+            configured: false,
+            selectable: false,
+            status: 'missing_credentials',
+          }),
+          expect.objectContaining({
+            provider: 'ollama',
+            displayName: 'Ollama',
+            authKind: 'none',
+            configured: true,
+            selectable: true,
+            status: 'ready',
+          }),
+          expect.objectContaining({
+            provider: 'codex-cli',
+            displayName: 'Codex CLI',
+            authKind: 'local_session',
+            configured: false,
+            selectable: true,
+            status: 'not_checked',
+            message: 'Uses the local Codex CLI login session; run `codex login` outside Nous.',
+            setupCommand: 'npm install -g @openai/codex',
+            versionCommand: 'codex --version',
+          }),
+        ]),
+      );
+    });
+
+    it('reports Ollama not running without disabling Codex CLI selection metadata', async () => {
+      const { ctx } = createMockContext();
+      const preferencesRouter = await loadPreferencesRouter();
+      const caller = preferencesRouter.createCaller(ctx);
+
+      detectOllamaMock.mockResolvedValueOnce({
+        installed: false,
+        running: false,
+        state: 'not_installed',
+        models: [],
+        defaultModel: null,
+      });
+
+      const result = await caller.getSystemStatus();
+
+      expect(result.configuredProviders).toEqual([]);
+      expect(result.providerConnections).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: 'ollama',
+            configured: false,
+            selectable: false,
+            status: 'not_running',
+          }),
+          expect.objectContaining({
+            provider: 'codex-cli',
+            configured: false,
+            selectable: true,
+            status: 'not_checked',
+          }),
+        ]),
+      );
     });
   });
 

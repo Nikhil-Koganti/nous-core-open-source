@@ -41,6 +41,12 @@ function providerCapabilities(
   return definition.capabilities as ProviderDefinition['capabilities'];
 }
 
+function providerAgentCli(
+  definition: ProviderDefinitionEntry,
+): ProviderDefinition['agentCli'] {
+  return (definition as ProviderDefinition).agentCli;
+}
+
 function isApiKeyProviderDefinition(
   definition: ProviderDefinitionEntry,
 ): boolean {
@@ -86,6 +92,8 @@ type AvailableModel = {
   provider: string;
   providerLabel?: string;
   available: boolean;
+  authKind?: ProviderAuthKind;
+  availabilityReason?: string;
 };
 
 type CachedModelList = {
@@ -106,6 +114,27 @@ type RoleAssignmentSummary = {
   providerId: ProviderId;
   fallbackProviderId?: ProviderId;
   modelSpec: string | null;
+};
+
+type ProviderConnectionStatus =
+  | 'ready'
+  | 'missing_credentials'
+  | 'not_running'
+  | 'not_checked'
+  | 'unavailable';
+
+type ProviderAuthKind = 'api_key' | 'local_session' | 'none' | 'custom';
+
+type ProviderConnection = {
+  provider: string;
+  displayName: string;
+  authKind: ProviderAuthKind;
+  configured: boolean;
+  selectable: boolean;
+  status: ProviderConnectionStatus;
+  message?: string;
+  setupCommand?: string;
+  versionCommand?: string;
 };
 
 const AnthropicModelSchema = z.object({
@@ -179,6 +208,36 @@ function providerLabelFor(provider: ProviderVendorKey): string {
   return providerDefinitionFor(provider).displayName;
 }
 
+function providerAuthKind(
+  definition: ProviderDefinitionEntry,
+): ProviderAuthKind {
+  if (isApiKeyProviderDefinition(definition)) {
+    return 'api_key';
+  }
+
+  const agentCliAuthKind = providerAgentCli(definition)?.auth.kind;
+  if (agentCliAuthKind === 'local_session' || agentCliAuthKind === 'none') {
+    return agentCliAuthKind;
+  }
+
+  if (agentCliAuthKind === 'api_key') {
+    return 'api_key';
+  }
+
+  if (agentCliAuthKind) {
+    return 'custom';
+  }
+
+  return 'none';
+}
+
+function providerAvailabilityReason(
+  definition: ProviderDefinitionEntry,
+): string | undefined {
+  const agentCli = providerAgentCli(definition);
+  return agentCli?.auth.description ?? agentCli?.install?.notes;
+}
+
 function apiKeyCredentialConfig(provider: Provider): {
   envVar: string;
   targetHost: string;
@@ -215,13 +274,110 @@ function defaultSelectableModels(): AvailableModel[] {
       !isApiKeyProviderDefinition(definition) &&
       capabilities?.modelListing !== true
     );
-  }).map((definition) => ({
-    id: `${definition.vendorKey}:${definition.defaultModelId}`,
-    name: `${definition.displayName} (default)`,
+  }).map((definition) => {
+    const availabilityReason = providerAvailabilityReason(definition);
+    return {
+      id: `${definition.vendorKey}:${definition.defaultModelId}`,
+      name: `${definition.displayName} (default)`,
+      provider: definition.vendorKey,
+      providerLabel: providerLabelFor(definition.vendorKey),
+      available: true,
+      authKind: providerAuthKind(definition),
+      ...(availabilityReason ? { availabilityReason } : {}),
+    };
+  });
+}
+
+async function providerConnectionForApiKeyProvider(
+  ctx: NousContext,
+  definition: ProviderDefinitionEntry,
+): Promise<ProviderConnection> {
+  const provider = definition.vendorKey as Provider;
+  const metadata = await ctx.credentialVaultService.getMetadata(
+    SYSTEM_APP_ID,
+    vaultKey(provider),
+  );
+  const configured = !!metadata;
+
+  return {
+    provider,
+    displayName: providerLabelFor(provider),
+    authKind: 'api_key',
+    configured,
+    selectable: configured,
+    status: configured ? 'ready' : 'missing_credentials',
+    message: configured
+      ? 'API key is configured.'
+      : `Add a ${providerLabelFor(provider)} API key before using this provider.`,
+  };
+}
+
+function providerConnectionForAgentCliProvider(
+  definition: ProviderDefinitionEntry,
+): ProviderConnection {
+  const install = providerAgentCli(definition)?.install;
+  const message = providerAvailabilityReason(definition);
+
+  return {
     provider: definition.vendorKey,
-    providerLabel: providerLabelFor(definition.vendorKey),
-    available: true,
-  }));
+    displayName: definition.displayName,
+    authKind: providerAuthKind(definition),
+    configured: false,
+    selectable: true,
+    status: 'not_checked',
+    ...(message ? { message } : {}),
+    ...(install?.command ? { setupCommand: install.command } : {}),
+    ...(install?.versionCommand ? { versionCommand: install.versionCommand } : {}),
+  };
+}
+
+function providerConnectionForOllama(ollamaStatus: {
+  running: boolean;
+}): ProviderConnection {
+  const configured = ollamaStatus.running;
+
+  return {
+    provider: 'ollama',
+    displayName: providerLabelFor('ollama'),
+    authKind: 'none',
+    configured,
+    selectable: configured,
+    status: configured ? 'ready' : 'not_running',
+    message: configured
+      ? 'Ollama is running.'
+      : 'Start Ollama before using local Ollama models.',
+  };
+}
+
+async function getProviderConnections(
+  ctx: NousContext,
+  ollamaStatus: { running: boolean },
+): Promise<ProviderConnection[]> {
+  return Promise.all(
+    PROVIDER_DEFINITIONS.map((definition) => {
+      if (isApiKeyProviderDefinition(definition)) {
+        return providerConnectionForApiKeyProvider(ctx, definition);
+      }
+
+      if (definition.vendorKey === 'ollama') {
+        return Promise.resolve(providerConnectionForOllama(ollamaStatus));
+      }
+
+      if (providerAgentCli(definition)) {
+        return Promise.resolve(providerConnectionForAgentCliProvider(definition));
+      }
+
+      const connection: ProviderConnection = {
+        provider: definition.vendorKey,
+        displayName: definition.displayName,
+        authKind: providerAuthKind(definition),
+        configured: false,
+        selectable: false,
+        status: 'not_checked',
+      };
+      return Promise.resolve(connection);
+    }),
+  );
 }
 
 function buildProviderSelection(
@@ -706,37 +862,11 @@ export const preferencesRouter = router({
     }),
 
   getSystemStatus: publicProcedure.query(async ({ ctx }) => {
-    // Determine which providers are configured
-    const providers = apiKeyProviderDefinitions().map(
-      (definition) => definition.vendorKey,
-    );
-    const configuredProviders: string[] = [];
-
-    for (const provider of providers) {
-      const metadata = await ctx.credentialVaultService.getMetadata(
-        SYSTEM_APP_ID,
-        vaultKey(provider),
-      );
-      if (metadata) {
-        configuredProviders.push(provider);
-      }
-    }
-
-    // Check Ollama status
-    let ollamaRunning = false;
-    let ollamaModels: string[] = [];
-    try {
-      const response = await fetch('http://127.0.0.1:11434/api/tags', {
-        signal: AbortSignal.timeout(2000),
-      });
-      if (response.ok) {
-        ollamaRunning = true;
-        const body = (await response.json()) as { models?: Array<{ name: string }> };
-        ollamaModels = body.models?.map((m) => m.name) ?? [];
-      }
-    } catch {
-      // Ollama not reachable
-    }
+    const ollamaStatus = await detectOllama();
+    const providerConnections = await getProviderConnections(ctx, ollamaStatus);
+    const configuredProviders = providerConnections
+      .filter((connection) => connection.authKind === 'api_key' && connection.configured)
+      .map((connection) => connection.provider);
 
     let credentialVaultHealthy = false
     try {
@@ -748,10 +878,11 @@ export const preferencesRouter = router({
 
     return {
       ollama: {
-        running: ollamaRunning,
-        models: ollamaModels,
+        running: ollamaStatus.running,
+        models: ollamaStatus.models,
       },
       configuredProviders,
+      providerConnections,
       credentialVaultHealthy,
     };
   }),
