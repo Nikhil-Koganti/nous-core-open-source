@@ -2,7 +2,7 @@
 
 import React from 'react'
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
-import { describe, expect, it, beforeAll, beforeEach, vi } from 'vitest'
+import { describe, expect, it, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import {
   makeTrpcMock,
   setMockHistoryEntries,
@@ -18,8 +18,15 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = () => {}
 })
 
+let consoleWarnSpy: ReturnType<typeof vi.spyOn>
+
 beforeEach(() => {
   setMockHistoryEntries([])
+  consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+})
+
+afterEach(() => {
+  consoleWarnSpy.mockRestore()
 })
 
 // ---------------------------------------------------------------------------

@@ -81,10 +81,17 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = () => {}
 })
 
+let consoleWarnSpy: ReturnType<typeof vi.spyOn>
+
 beforeEach(() => {
   // SP 1.9 — reset the mocked history surface between tests so a leaked
   // entry from a previous test doesn't contaminate the next render.
   setMockHistory([])
+  consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+})
+
+afterEach(() => {
+  consoleWarnSpy.mockRestore()
 })
 
 function makePfcPayload(overrides?: Partial<ThoughtPfcDecisionPayload>): ThoughtPfcDecisionPayload {
@@ -288,6 +295,26 @@ describe('ChatPanel — Inline Thought Stream', () => {
     expect(screen.getByText(/own thought/)).toBeTruthy()
     expect(screen.queryByText(/other reply/)).toBeNull()
     expect(screen.queryByText(/other thought/)).toBeNull()
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      '[ChatPanelRenderer] stream-chunk-accepted',
+      expect.objectContaining({
+        channel: 'chat:content-chunk',
+        traceId: 'trace-1',
+        activeTraceId: 'trace-1',
+        contentLength: 'own reply'.length,
+        accumulatedContentLength: 'own reply'.length,
+      }),
+    )
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      '[ChatPanelRenderer] stream-chunk-dropped',
+      expect.objectContaining({
+        channel: 'chat:content-chunk',
+        traceId: 'trace-2',
+        activeTraceId: 'trace-1',
+        contentLength: ' other reply'.length,
+        reason: 'trace_mismatch',
+      }),
+    )
   })
 
   it('suppresses memory-write, memory-mutation, escalation PFC decisions (Q5)', () => {

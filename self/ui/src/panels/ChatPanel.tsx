@@ -123,6 +123,11 @@ function withoutQueuedFlag(message: ChatMessage): ChatMessage {
 
 /** Max inline thought items to retain across all traces. */
 const INLINE_BUFFER_MAX = 200
+const CHAT_PANEL_RENDERER_LOG_PREFIX = '[ChatPanelRenderer]'
+
+function logChatPanelRenderer(event: string, payload: Record<string, unknown>) {
+    console.warn(`${CHAT_PANEL_RENDERER_LOG_PREFIX} ${event}`, payload)
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -227,6 +232,9 @@ export function ChatPanel(props: ChatPanelProps) {
     const [streamingContent, setStreamingContent] = useState('')
     const [streamingThinking, setStreamingThinking] = useState('')
     const streamingTraceIdRef = useRef<string | null>(null)
+    const streamingContentLengthRef = useRef(0)
+    const streamingThinkingLengthRef = useRef(0)
+    const sendSequenceRef = useRef(0)
 
     const acceptsStreamingPayload = useCallback((payload: { traceId?: string }) => {
         if (!payload.traceId) return true
@@ -237,13 +245,59 @@ export function ChatPanel(props: ChatPanelProps) {
         return streamingTraceIdRef.current === payload.traceId
     }, [])
 
+    const handleStreamingChunk = useCallback((
+        channel: 'chat:content-chunk' | 'chat:thinking-chunk',
+        payload: { content?: string; traceId?: string },
+    ) => {
+        const contentLength = payload.content?.length ?? 0
+        const accepted = contentLength > 0 && acceptsStreamingPayload(payload)
+        if (!accepted) {
+            logChatPanelRenderer('stream-chunk-dropped', {
+                channel,
+                traceId: payload.traceId ?? null,
+                activeTraceId: streamingTraceIdRef.current,
+                contentLength,
+                reason: contentLength === 0 ? 'empty_content' : 'trace_mismatch',
+            })
+            return
+        }
+
+        if (channel === 'chat:content-chunk') {
+            setStreamingContent((prev) => {
+                const next = prev + payload.content!
+                streamingContentLengthRef.current = next.length
+                logChatPanelRenderer('stream-chunk-accepted', {
+                    channel,
+                    traceId: payload.traceId ?? null,
+                    activeTraceId: streamingTraceIdRef.current,
+                    contentLength,
+                    accumulatedContentLength: next.length,
+                    accumulatedThinkingLength: streamingThinkingLengthRef.current,
+                })
+                return next
+            })
+            return
+        }
+
+        setStreamingThinking((prev) => {
+            const next = prev + payload.content!
+            streamingThinkingLengthRef.current = next.length
+            logChatPanelRenderer('stream-chunk-accepted', {
+                channel,
+                traceId: payload.traceId ?? null,
+                activeTraceId: streamingTraceIdRef.current,
+                contentLength,
+                accumulatedContentLength: streamingContentLengthRef.current,
+                accumulatedThinkingLength: next.length,
+            })
+            return next
+        })
+    }, [acceptsStreamingPayload])
+
     useEventSubscription({
         channels: ['chat:content-chunk'],
         onEvent: (_channel, payload) => {
-            const p = payload as { content: string; traceId?: string }
-            if (p.content && acceptsStreamingPayload(p)) {
-                setStreamingContent(prev => prev + p.content)
-            }
+            handleStreamingChunk('chat:content-chunk', payload as { content?: string; traceId?: string })
         },
         enabled: sending,
     })
@@ -251,10 +305,7 @@ export function ChatPanel(props: ChatPanelProps) {
     useEventSubscription({
         channels: ['chat:thinking-chunk'],
         onEvent: (_channel, payload) => {
-            const p = payload as { content: string; traceId?: string }
-            if (p.content && acceptsStreamingPayload(p)) {
-                setStreamingThinking(prev => prev + p.content)
-            }
+            handleStreamingChunk('chat:thinking-chunk', payload as { content?: string; traceId?: string })
         },
         enabled: sending,
     })
@@ -348,14 +399,33 @@ export function ChatPanel(props: ChatPanelProps) {
     // the backend response. The overlay entry is pruned when the matching
     // server entry appears.
     const invoke = async (userMsg: string, skipUserAppend = false, answeredOverlayKey: string | null = null) => {
+        const sendSequence = sendSequenceRef.current + 1
+        sendSequenceRef.current = sendSequence
         setSending(true)
         streamingTraceIdRef.current = null
+        streamingContentLengthRef.current = 0
+        streamingThinkingLengthRef.current = 0
+        logChatPanelRenderer('send-started', {
+            sendSequence,
+            stage,
+            skipUserAppend,
+            hasAnsweredOverlayKey: answeredOverlayKey != null,
+            hasProjectId: projectId != null,
+            hasSessionId: sessionId != null,
+        })
         onSendStart?.()
 
         let userOverlayKey = answeredOverlayKey
         if (!skipUserAppend) {
             const userEntry: ChatMessage = { role: 'user', content: userMsg, timestamp: new Date().toISOString() }
             userOverlayKey = overlayKeyForOptimisticSend(userEntry)
+            logChatPanelRenderer('user-overlay-appended', {
+                sendSequence,
+                role: userEntry.role,
+                contentLength: userEntry.content.length,
+                timestamp: userEntry.timestamp,
+                overlayKeyPresent: userOverlayKey != null,
+            })
             setLocalOverlay((prev) => [
                 ...prev,
                 {
@@ -386,10 +456,30 @@ export function ChatPanel(props: ChatPanelProps) {
                 key: overlayKeyForOptimisticSend(assistantEntry),
                 issuedAt: Date.now(),
             }
+            logChatPanelRenderer('assistant-overlay-appended', {
+                sendSequence,
+                traceId: assistantEntry.traceId ?? null,
+                contentLength: assistantEntry.content.length,
+                hasThinkingContent: Boolean(assistantEntry.thinkingContent),
+                hasThinkingUnavailable: Boolean(assistantEntry.thinking_unavailable),
+                emptyResponseKind: assistantEntry.empty_response_kind ?? null,
+                hasStructuredCards: (assistantEntry.cards?.length ?? 0) > 0,
+                cardCount: assistantEntry.cards?.length ?? 0,
+                answeredOverlayKeyPresent: userOverlayKey != null,
+            })
             setLocalOverlay((prev) => insertOverlayAfterKey(prev, userOverlayKey, assistantOverlay))
             // Reconcile: authoritative response replaces streaming buffer.
             // The assistant entry is also reconciled via the useQuery refetch
             // driven by the useChatApi.send invalidate (Invariant E preserved).
+            logChatPanelRenderer('stream-buffer-cleared', {
+                sendSequence,
+                traceId: assistantEntry.traceId ?? null,
+                contentLength: streamingContentLengthRef.current,
+                thinkingLength: streamingThinkingLengthRef.current,
+                reason: 'send_resolved',
+            })
+            streamingContentLengthRef.current = 0
+            streamingThinkingLengthRef.current = 0
             setStreamingContent('')
             setStreamingThinking('')
         } catch {
@@ -407,6 +497,11 @@ export function ChatPanel(props: ChatPanelProps) {
                     issuedAt: Date.now(),
                 },
             ])
+            logChatPanelRenderer('assistant-error-overlay-appended', {
+                sendSequence,
+                contentLength: errEntry.content.length,
+                timestamp: errEntry.timestamp,
+            })
         } finally {
             setSending(false)
         }
@@ -432,6 +527,11 @@ export function ChatPanel(props: ChatPanelProps) {
                 timestamp: new Date().toISOString(),
                 queued: true,
             }
+            logChatPanelRenderer('user-message-queued', {
+                queuedDepth: queuedMessages.length + 1,
+                contentLength: queuedEntry.content.length,
+                timestamp: queuedEntry.timestamp,
+            })
             setLocalOverlay((prev) => [
                 ...prev,
                 {
@@ -461,6 +561,11 @@ export function ChatPanel(props: ChatPanelProps) {
         const answeredOverlayKey = queuedOverlay?.kind === 'optimistic-send'
             ? overlayKeyForOptimisticSend(withoutQueuedFlag(queuedOverlay.message))
             : null
+        logChatPanelRenderer('queued-message-draining', {
+            queuedDepthBeforeDrain: queuedMessages.length,
+            queuedDepthAfterDrain: rest.length,
+            answeredOverlayKeyPresent: answeredOverlayKey != null,
+        })
         // Clear the queued flag on the oldest queued user-message overlay
         // entry (FIFO). Re-keys the overlay entry with the un-queued shape
         // so the dedup helper can match it against the eventual server entry.
