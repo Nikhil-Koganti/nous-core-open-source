@@ -1,4 +1,5 @@
 export {
+  CODEX_CLI_EXECUTION_CAPABILITY_PROFILE,
   createCodexCliAdapter,
   providerAdapter,
   renderCodexCliPrompt,

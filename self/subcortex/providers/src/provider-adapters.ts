@@ -7,7 +7,7 @@ import { providerAdapter as openaiProviderAdapter } from './providers/openai/ada
 
 export * from './schemas/provider-adapter.js';
 export { providerAdapter as anthropicAdapter, createAnthropicAdapter } from './providers/anthropic/adapter.js';
-export { providerAdapter as codexCliAdapter, createCodexCliAdapter, renderCodexCliPrompt } from './providers/codex-cli/adapter.js';
+export { providerAdapter as codexCliAdapter, CODEX_CLI_EXECUTION_CAPABILITY_PROFILE, createCodexCliAdapter, renderCodexCliPrompt } from './providers/codex-cli/adapter.js';
 export { providerAdapter as ollamaAdapter, createOllamaAdapter, isToolCapableModel } from './providers/ollama/adapter.js';
 export { providerAdapter as openaiAdapter, createChatCompletionsAdapter } from './providers/openai/adapter.js';
 

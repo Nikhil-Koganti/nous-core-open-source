@@ -40,6 +40,14 @@ export { ChatCompletionsProvider } from './protocols/openai-api/provider.js';
 export { ProviderRegistry } from './runtime/provider-runtime.js';
 export type { ProviderRegistryOptions } from './runtime/provider-runtime.js';
 export {
+  CliSessionManager,
+  deriveProviderSessionKey,
+} from './runtime/cli-session-manager.js';
+export type {
+  CliSessionManagerOptions,
+  CliSessionSnapshot,
+} from './runtime/cli-session-manager.js';
+export {
   InferenceLane,
   InferenceLaneRegistry,
   LaneAwareProvider,

@@ -68,6 +68,7 @@ export const CODEX_CLI_PROVIDER_DEFINITION = {
       spawnErrorKind: 'spawn_error',
     },
     caveats: [
+      'Transient and batch execution use the one-shot `codex exec` command path; chat-bound fixtures are mediated by the runtime CLI session manager using the adapter execution capability profile, currently `session_bound_command` for Codex CLI rather than a strict long-lived process protocol.',
       'Live process execution shells out to the local Codex CLI; tests must inject a fake runner.',
       'Provider output prefers Codex CLI `--output-last-message` so chat receives the final assistant response rather than the execution transcript.',
       'Streaming uses `codex exec --json` JSONL events and falls back to `--output-last-message` only when no assistant deltas were parsed.',

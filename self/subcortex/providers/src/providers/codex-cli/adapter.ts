@@ -16,6 +16,8 @@ const CODEX_CLI_ADAPTER_CAPABILITIES: AdapterCapabilities = {
   streaming: true,
 };
 
+export const CODEX_CLI_EXECUTION_CAPABILITY_PROFILE = 'session_bound_command' as const;
+
 export function createCodexCliAdapter(): ProviderAdapter {
   return {
     capabilities: CODEX_CLI_ADAPTER_CAPABILITIES,
@@ -80,6 +82,7 @@ export const providerAdapter = defineProviderAdapter({
   displayName: 'Codex CLI',
   protocol: AGENT_CLI_PROTOCOL_ID,
   capabilities: CODEX_CLI_ADAPTER_CAPABILITIES,
+  executionCapabilityProfile: CODEX_CLI_EXECUTION_CAPABILITY_PROFILE,
   create() {
     return createCodexCliAdapter();
   },
