@@ -8,6 +8,7 @@ import {
   ChatCompletionsProvider,
   CERTIFIED_PROVIDER_FACTORIES,
   CodexCliProvider,
+  GitHubCopilotCliProvider,
   OllamaProvider,
   PROVIDER_DEFINITIONS,
   ProviderRegistry,
@@ -160,6 +161,7 @@ describe('provider definition to adapter to registry pipeline', () => {
     const expectedClassByVendor = {
       anthropic: AnthropicProvider,
       'codex-cli': CodexCliProvider,
+      'github-copilot-cli': GitHubCopilotCliProvider,
       openai: ChatCompletionsProvider,
       ollama: OllamaProvider,
     };
