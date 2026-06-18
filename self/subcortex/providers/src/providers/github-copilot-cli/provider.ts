@@ -246,7 +246,7 @@ function toProviderError(
 ): NousError {
   if (!failure) {
     return new NousError(
-      'GitHub Copilot CLI invocation failed.',
+      '[github-copilot-cli] invocation failed',
       'PROVIDER_UNAVAILABLE',
       { provider: 'github-copilot-cli', stderr, stdout },
     );
@@ -254,8 +254,8 @@ function toProviderError(
 
   return new NousError(
     stderr && stderr.trim().length > 0
-      ? `${failure.message} ${stderr.trim().slice(0, 500)}`
-      : failure.message,
+      ? `[github-copilot-cli] ${failure.message} ${stderr.trim().slice(0, 500)}`
+      : `[github-copilot-cli] ${failure.message}`,
     failure.kind === 'auth' ? 'PROVIDER_ERROR' : 'PROVIDER_UNAVAILABLE',
     {
       provider: 'github-copilot-cli',
