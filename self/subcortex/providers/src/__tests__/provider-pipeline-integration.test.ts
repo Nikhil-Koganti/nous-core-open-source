@@ -271,6 +271,10 @@ describe('github-copilot-cli — fake runner invocation', () => {
       traceId: TRACE_ID,
     } as any);
     expect(response.output).toBe('ls -la');
+
+    const call = fakeRunner.calls[0];
+    expect(call.invocation.command.args).toContain('--target');
+    expect(call.invocation.command.args).toContain('shell');
   });
 
   it('throws on non-zero exit', async () => {

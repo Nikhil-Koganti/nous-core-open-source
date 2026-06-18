@@ -65,7 +65,6 @@ export const GITHUB_COPILOT_CLI_PROVIDER_DEFINITION = {
 
     caveats: [
       'Declared session_bound_command — cannot be assigned to Cortex Chat or Cortex System roles',
-      'Set NOUS_GH_BIN or GH_BIN env var to override the gh executable path',
     ],
 
     targetIssueRefs: ['#280'],
