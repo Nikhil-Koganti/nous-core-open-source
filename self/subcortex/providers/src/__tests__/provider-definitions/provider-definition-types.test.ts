@@ -29,7 +29,7 @@ describe('provider definition type derivation', () => {
       (definition) => definition.vendorKey,
     );
 
-    expect(keys.sort()).toEqual(['anthropic', 'codex-cli', 'ollama', 'openai']);
+    expect(keys.sort()).toEqual(['anthropic', 'codex-cli', 'github-copilot-cli', 'ollama', 'openai']);
   });
 
   it('supports local leaf-addition fixtures without production branch logic', () => {
