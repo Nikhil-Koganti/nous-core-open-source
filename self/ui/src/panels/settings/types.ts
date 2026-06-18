@@ -27,9 +27,31 @@ export interface OllamaInfo {
   models: string[]
 }
 
+export type ProviderConnectionStatus =
+  | 'ready'
+  | 'missing_credentials'
+  | 'not_running'
+  | 'not_checked'
+  | 'unavailable'
+
+export type ProviderAuthKind = 'api_key' | 'local_session' | 'none' | 'custom'
+
+export interface ProviderConnection {
+  provider: string
+  displayName: string
+  authKind: ProviderAuthKind
+  configured: boolean
+  selectable: boolean
+  status: ProviderConnectionStatus
+  message?: string
+  setupCommand?: string
+  versionCommand?: string
+}
+
 export interface SystemStatus {
   ollama: OllamaInfo
   configuredProviders: string[]
+  providerConnections?: ProviderConnection[]
   credentialVaultHealthy: boolean
 }
 
@@ -47,17 +69,27 @@ export interface AvailableModel {
   id: string
   name: string
   provider: string
+  providerLabel?: string
   available: boolean
+  authKind?: ProviderAuthKind
+  availabilityReason?: string
+  executionCapabilityProfile?: 'one_shot_command' | 'session_bound_command' | 'persistent_process'
+  roleCompatibility?: Record<string, {
+    selectable: boolean
+    reason?: string
+    executionCapabilityProfile?: 'one_shot_command' | 'session_bound_command' | 'persistent_process'
+    requiredExecutionCapabilityProfile?: 'one_shot_command' | 'session_bound_command' | 'persistent_process'
+  }>
 }
 
 export interface RoleAssignmentDisplayEntry {
   role: string
-  providerId: string | null
+  modelSpec: string | null
+  providerId?: string | null
 }
 
 export interface HydratedRoleAssignmentDisplayEntry extends RoleAssignmentDisplayEntry {
   displayName?: string | null
-  modelSpec?: string | null
 }
 
 export interface RecommendedModel {
@@ -95,7 +127,7 @@ export interface PreferencesApi {
   getRoleAssignments?: () => Promise<RoleAssignmentDisplayEntry[]>
   getHardwareRecommendations?: () => Promise<HardwareRecommendations>
   setRoleAssignment?: (
-    input: { role: string; modelSpec: string },
+    input: { role: string; modelSpec: string | null },
   ) => Promise<{ success: boolean; error?: string }>
   listOllamaModels?: () => Promise<{ models: OllamaModelEntry[] }>
   pullOllamaModel?: (name: string) => Promise<{ success: boolean }>

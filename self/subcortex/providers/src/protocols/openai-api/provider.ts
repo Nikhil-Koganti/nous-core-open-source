@@ -11,9 +11,8 @@ import type {
   ModelRequest,
   ModelResponse,
   ModelStreamChunk,
-  ProviderId,
 } from '@nous/shared';
-import type { ProviderDefinition } from '../../schemas/provider-definition.js';
+import type { ProviderDefinitionLeaf } from '../../schemas/provider-definition.js';
 import { TextModelInputSchema } from '../../schemas/text-model-input.js';
 
 const DEFAULT_ENDPOINT = 'https://api.openai.com';
@@ -23,7 +22,6 @@ const DEFAULT_TIMEOUT_MS = 60_000;
 export const CHAT_COMPLETIONS_PROVIDER_DEFINITION = {
   vendorKey: 'openai',
   displayName: 'Chat Completions',
-  wellKnownProviderId: '10000000-0000-0000-0000-000000000002' as ProviderId,
   providerType: 'text',
   providerClass: 'remote_text',
   protocol: 'chat-completions',
@@ -42,7 +40,7 @@ export const CHAT_COMPLETIONS_PROVIDER_DEFINITION = {
     nativeToolUse: true,
   },
   isLocal: false,
-} as const satisfies ProviderDefinition;
+} as const satisfies ProviderDefinitionLeaf;
 
 export class ChatCompletionsProvider implements IModelProvider {
   private readonly config: ModelProviderConfig;
