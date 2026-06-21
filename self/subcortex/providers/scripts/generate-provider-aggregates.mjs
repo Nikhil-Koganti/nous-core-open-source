@@ -140,6 +140,7 @@ function providerAdapterExtraExports(vendor) {
     ['codex-cli', ['CODEX_CLI_EXECUTION_CAPABILITY_PROFILE', 'createCodexCliAdapter', 'renderCodexCliPrompt']],
     ['ollama', ['createOllamaAdapter', 'isToolCapableModel']],
     ['openai', ['createChatCompletionsAdapter']],
+    ['qwen-code', ['QWEN_CODE_EXECUTION_CAPABILITY_PROFILE', 'createQwenCodeAdapter', 'renderQwenCodePrompt']],
   ]);
   const extras = extrasByVendor.get(vendor) ?? [];
   return extras.length > 0 ? `, ${extras.join(', ')}` : '';

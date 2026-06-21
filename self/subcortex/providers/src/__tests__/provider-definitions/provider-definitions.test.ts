@@ -30,6 +30,11 @@ const expectedDefinitions = {
     defaultModelId: 'llama3.2',
     envVar: undefined,
   },
+  'qwen-code': {
+    defaultEndpoint: 'http://localhost',
+    defaultModelId: 'qwen-code/default',
+    envVar: undefined,
+  },
 } as const;
 
 describe('provider definitions catalog', () => {
@@ -39,6 +44,7 @@ describe('provider definitions catalog', () => {
       'codex-cli',
       'ollama',
       'openai',
+      'qwen-code',
     ]);
   });
 
@@ -76,6 +82,7 @@ describe('provider definitions catalog', () => {
       join('providers', 'codex-cli', 'definition.ts'),
       join('protocols', 'openai-api', 'provider.ts'),
       join('providers', 'ollama', 'implementation.ts'),
+      join('providers', 'qwen-code', 'definition.ts'),
     ];
     const forbidden = [
       /fetch/,
