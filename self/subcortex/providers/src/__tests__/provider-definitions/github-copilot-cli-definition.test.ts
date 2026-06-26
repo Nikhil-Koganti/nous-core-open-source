@@ -10,8 +10,7 @@ import {
 
 describe('github-copilot-cli definition', () => {
   it('satisfies ProviderDefinitionSchema once hydrated with a derived id', () => {
-    // Leaves do not hand-author wellKnownProviderId; the catalog hydrates a derived
-    // built-in id before the strict runtime schema validates the definition.
+    // Leaves omit wellKnownProviderId; hydrate the derived id before strict validation.
     const hydrated = {
       ...GITHUB_COPILOT_CLI_PROVIDER_DEFINITION,
       wellKnownProviderId: deriveBuiltInProviderId('github-copilot-cli') as ProviderId,

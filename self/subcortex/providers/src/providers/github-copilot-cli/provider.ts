@@ -51,21 +51,13 @@ export const GITHUB_COPILOT_CLI_AGENT_ADAPTER = createAgentCliProviderAdapter({
   defaults: GITHUB_COPILOT_CLI_INVOCATION_DEFAULTS,
 });
 
-/**
- * Grace period after SIGTERM before escalating to SIGKILL and force-resolving a
- * timed-out invocation. Bounds how long a `gh` process that ignores SIGTERM can
- * keep the provider lane occupied past its timeout.
- */
+/** Grace period after SIGTERM before escalating to SIGKILL so a timed-out `gh` process can't hang the lane. */
 export const GH_PROCESS_SIGTERM_GRACE_MS = 2_000;
 
 export interface GhProcessRunnerOptions {
   /** Overrides the parent environment used as the base for the child process (testing seam). */
   readonly baseEnv?: Readonly<Record<string, string | undefined>>;
-  /**
-   * Grace period (ms) to wait after SIGTERM before escalating to SIGKILL and
-   * force-resolving a timed-out run. Defaults to GH_PROCESS_SIGTERM_GRACE_MS;
-   * exposed as a testing seam to exercise the escalation path without a long wait.
-   */
+  /** Overrides the SIGTERM→SIGKILL grace period in ms (testing seam). Defaults to GH_PROCESS_SIGTERM_GRACE_MS. */
   readonly sigtermGraceMs?: number;
 }
 
@@ -129,9 +121,8 @@ function runGhProcessRaw(
       : setTimeout(() => {
           timedOut = true;
           child.kill('SIGTERM');
-          // Escalation: if `gh` ignores SIGTERM and never emits close/error, the
-          // promise would hang forever and keep the provider lane occupied. After a
-          // short grace period, force-kill and resolve so a timeout always settles.
+          // If `gh` ignores SIGTERM, force-kill and resolve after the grace period
+          // so a timeout always settles instead of hanging the lane.
           forceKillTimer = setTimeout(() => {
             if (settled) return;
             settled = true;
