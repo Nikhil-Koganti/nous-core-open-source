@@ -1,4 +1,9 @@
-import { execFileSync, spawn } from 'node:child_process';
+import {
+  execFileSync,
+  spawn,
+  type ChildProcessWithoutNullStreams,
+  type SpawnOptionsWithoutStdio,
+} from 'node:child_process';
 import { NousError, ValidationError } from '@nous/shared';
 import type {
   IModelProvider,
@@ -37,7 +42,9 @@ export interface QwenCodeProviderOptions {
 export interface QwenCodeProcessRunnerOptions {
   readonly baseEnv?: Readonly<Record<string, string | undefined>>;
   readonly commandResolver?: QwenCodeCommandResolver;
+  readonly killEscalationDelayMs?: number;
   readonly platform?: NodeJS.Platform;
+  readonly spawn?: QwenCodeSpawn;
 }
 
 const QWEN_CODE_NOUS_BIN_ENV = 'NOUS_QWEN_CODE_BIN';
@@ -48,6 +55,42 @@ export type QwenCodeCommandResolver = (
   args: readonly string[],
   options: { readonly env?: NodeJS.ProcessEnv },
 ) => string;
+
+export type QwenCodeSpawn = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptionsWithoutStdio,
+) => ChildProcessWithoutNullStreams;
+
+export const QWEN_CODE_DEFAULT_ENV_ALLOWLIST = [
+  'PATH',
+  'Path',
+  'PATHEXT',
+  'SystemRoot',
+  'WINDIR',
+  'HOME',
+  'USERPROFILE',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'XDG_CONFIG_HOME',
+  'XDG_CACHE_HOME',
+  'XDG_DATA_HOME',
+  'NOUS_QWEN_CODE_BIN',
+  'QWEN_CODE_BIN',
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'OPENAI_MODEL',
+  'DASHSCOPE_API_KEY',
+  'DASHSCOPE_BASE_URL',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+] as const;
+
+const QWEN_CODE_DEFAULT_KILL_ESCALATION_DELAY_MS = 2_000;
 
 export const QWEN_CODE_INVOCATION_DEFAULTS: AgentCliInvocationDefaults = {
   command: {
@@ -106,10 +149,10 @@ export class QwenCodeProvider implements IModelProvider {
   async invoke(request: ModelRequest): Promise<ModelResponse> {
     const runner = this.runner;
     const input = this.validateInput(request.input);
+    const renderedPrompt = renderTextModelInput(input);
     const start = Date.now();
     const invocationInput = {
-      args: this.invocationArgs(),
-      input: renderTextModelInput(input),
+      args: this.invocationArgs(renderedPrompt),
       metadata: {
         provider: 'qwen-code',
         providerId: this.config.id,
@@ -138,14 +181,14 @@ export class QwenCodeProvider implements IModelProvider {
   async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
     const runner = this.runner;
     const input = this.validateInput(request.input);
+    const renderedPrompt = renderTextModelInput(input);
     const state: QwenCodeStreamState = {
       emittedContent: false,
       finalResult: undefined,
     };
 
     const invocationInput = {
-      args: this.invocationArgs(),
-      input: renderTextModelInput(input),
+      args: this.invocationArgs(renderedPrompt),
       metadata: {
         provider: 'qwen-code',
         providerId: this.config.id,
@@ -215,29 +258,27 @@ export class QwenCodeProvider implements IModelProvider {
     return result.data;
   }
 
-  private invocationArgs(): readonly string[] {
-    // Qwen Code headless mode reads the prompt from stdin, so the rendered
-    // prompt is piped via `invocation.input` rather than passed as a flag value.
+  private invocationArgs(prompt: string): readonly string[] {
+    const args = ['-p', prompt];
     if (
       this.config.modelId.length === 0 ||
       this.config.modelId === QWEN_CODE_DEFAULT_MODEL_ID
     ) {
-      return [];
+      return args;
     }
 
-    return ['--model', this.config.modelId];
+    return [...args, '--model', this.config.modelId];
   }
 
-  private mergeRunnerOptions(request: ModelRequest): AgentCliRunnerOptions | undefined {
-    const signal = request.abortSignal
-      ? { aborted: request.abortSignal.aborted }
-      : this.runnerOptions?.signal;
-
-    if (!signal && !this.runnerOptions) {
-      return undefined;
-    }
+  private mergeRunnerOptions(request: ModelRequest): AgentCliRunnerOptions {
+    const signal = request.abortSignal ?? this.runnerOptions?.signal;
+    const environmentPolicy = this.runnerOptions?.environmentPolicy ?? {
+      mergeStrategy: 'allowlist' as const,
+      allowlist: QWEN_CODE_DEFAULT_ENV_ALLOWLIST,
+    };
 
     return {
+      environmentPolicy,
       ...this.runnerOptions,
       ...(signal ? { signal } : {}),
     };
@@ -393,10 +434,11 @@ function runQwenCodeProcessRaw(
   }
 
   return new Promise((resolve) => {
-    let child;
+    let child: ChildProcessWithoutNullStreams;
     try {
       const env = buildProcessEnv(invocation.command.env, runnerOptions, options);
-      child = spawn(resolveSpawnExecutable(invocation.command.executable, {
+      const spawnProcess = options.spawn ?? spawn;
+      child = spawnProcess(resolveSpawnExecutable(invocation.command.executable, {
         commandResolver: options.commandResolver,
         env,
         platform: options.platform,
@@ -405,7 +447,7 @@ function runQwenCodeProcessRaw(
         env,
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
-        shell: process.platform === 'win32',
+        shell: false,
       });
     } catch (error) {
       resolve({
@@ -420,12 +462,69 @@ function runQwenCodeProcessRaw(
     let stderr = '';
     let timedOut = false;
     let settled = false;
-    const timeout = invocation.timeoutMs === undefined
+    let abortError: Error | undefined;
+    let timeout: NodeJS.Timeout | undefined;
+    let escalationTimeout: NodeJS.Timeout | undefined;
+    const killEscalationDelayMs = Math.max(
+      0,
+      Math.trunc(options.killEscalationDelayMs ?? QWEN_CODE_DEFAULT_KILL_ESCALATION_DELAY_MS),
+    );
+    const clearTimers = (): void => {
+      if (timeout) clearTimeout(timeout);
+      if (escalationTimeout) clearTimeout(escalationTimeout);
+      timeout = undefined;
+      escalationTimeout = undefined;
+    };
+    let handleAbort: () => void = () => undefined;
+    const settle = (raw: AgentCliRawResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      runnerOptions?.signal?.removeEventListener?.('abort', handleAbort);
+      resolve(raw);
+    };
+    const killChild = (signal: NodeJS.Signals): void => {
+      try {
+        child.kill(signal);
+      } catch {
+        // The process may have already exited; close/error will settle it.
+      }
+    };
+    const terminateChild = (reason: 'abort' | 'timeout'): void => {
+      if (settled) return;
+      if (reason === 'timeout') {
+        timedOut = true;
+      } else {
+        abortError = new Error('Agent CLI invocation aborted.');
+      }
+
+      killChild('SIGTERM');
+      if (!escalationTimeout) {
+        escalationTimeout = setTimeout(() => {
+          killChild('SIGKILL');
+          settle({
+            stdout,
+            stderr,
+            error: abortError,
+            timedOut,
+            signal: 'SIGKILL',
+            startedAt,
+            endedAt: Date.now(),
+          });
+        }, killEscalationDelayMs);
+      }
+    };
+    handleAbort = (): void => terminateChild('abort');
+
+    timeout = invocation.timeoutMs === undefined
       ? undefined
       : setTimeout(() => {
-        timedOut = true;
-        child.kill('SIGTERM');
+        terminateChild('timeout');
       }, invocation.timeoutMs);
+    runnerOptions?.signal?.addEventListener?.('abort', handleAbort, { once: true });
+    if (runnerOptions?.signal?.aborted) {
+      handleAbort();
+    }
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -438,10 +537,7 @@ function runQwenCodeProcessRaw(
       onTranscriptEvent?.({ stream: 'stderr', text: chunk, timestamp: new Date().toISOString() });
     });
     child.on('error', (error) => {
-      if (settled) return;
-      settled = true;
-      if (timeout) clearTimeout(timeout);
-      resolve({
+      settle({
         stdout,
         stderr,
         error,
@@ -451,10 +547,7 @@ function runQwenCodeProcessRaw(
       });
     });
     child.on('close', (exitCode, signal) => {
-      if (settled) return;
-      settled = true;
-      if (timeout) clearTimeout(timeout);
-      resolve({
+      settle({
         exitCode,
         signal,
         stdout,
@@ -465,7 +558,18 @@ function runQwenCodeProcessRaw(
       });
     });
 
-    child.stdin.end(invocation.input ?? '');
+    try {
+      child.stdin.end(invocation.input ?? '');
+    } catch (error) {
+      settle({
+        stdout,
+        stderr,
+        error,
+        timedOut,
+        startedAt,
+        endedAt: Date.now(),
+      });
+    }
   });
 }
 
@@ -486,10 +590,13 @@ function buildProcessEnv(
   options: QwenCodeProcessRunnerOptions,
 ): NodeJS.ProcessEnv {
   const baseEnv = options.baseEnv ?? process.env;
-  const policy = runnerOptions?.environmentPolicy;
+  const policy = runnerOptions?.environmentPolicy ?? {
+    mergeStrategy: 'allowlist' as const,
+    allowlist: QWEN_CODE_DEFAULT_ENV_ALLOWLIST,
+  };
   const env: NodeJS.ProcessEnv = {};
 
-  if (!policy || policy.mergeStrategy === 'explicit') {
+  if (policy.mergeStrategy === 'explicit') {
     assignDefinedEnv(env, baseEnv);
   } else if (policy.mergeStrategy === 'allowlist') {
     for (const key of policy.allowlist ?? []) {

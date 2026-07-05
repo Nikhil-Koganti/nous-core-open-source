@@ -14,6 +14,7 @@ export {
 } from './definition.js';
 export {
   QWEN_CODE_AGENT_ADAPTER,
+  QWEN_CODE_DEFAULT_ENV_ALLOWLIST,
   QWEN_CODE_INVOCATION_DEFAULTS,
   QwenCodeProvider,
   createQwenCodeInvocationDefaults,
@@ -25,5 +26,6 @@ export type {
   QwenCodeCommandResolver,
   QwenCodeProcessRunnerOptions,
   QwenCodeProviderOptions,
+  QwenCodeSpawn,
 } from './implementation.js';
 export { providerFactory } from './provider.js';

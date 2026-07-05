@@ -1,3 +1,6 @@
+import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import {
   type GatewayContextFrame,
@@ -8,11 +11,14 @@ import {
 } from '@nous/shared';
 import {
   QWEN_CODE_DEFAULT_MODEL_ID,
+  QWEN_CODE_DEFAULT_ENV_ALLOWLIST,
   QWEN_CODE_EXECUTION_CAPABILITY_PROFILE,
   QWEN_CODE_PROVIDER_DEFINITION,
   QwenCodeProvider,
   type QwenCodeCommandResolver,
+  type QwenCodeSpawn,
   createQwenCodeAdapter,
+  createQwenCodeProcessRunner,
   providerAdapter,
   providerDefinition,
   providerFactory,
@@ -26,6 +32,52 @@ import { AgentCliProviderMetadataSchema } from '../../schemas/provider-definitio
 const TRACE_ID = '550e8400-e29b-41d4-a716-446655440188' as TraceId;
 const PROVIDER_ID = '10000000-0000-0000-0000-000000000005' as ProviderId;
 const CREATED_AT = '2026-06-12T00:00:00.000Z';
+
+interface FakeChildProcess extends ChildProcessWithoutNullStreams {
+  readonly killSignals: NodeJS.Signals[];
+  readonly stdinInput: string[];
+}
+
+function createFakeChildProcess(
+  options: {
+    readonly closeOnStdinEnd?: boolean;
+    readonly closeOnKill?: boolean;
+  } = {},
+): FakeChildProcess {
+  const child = new EventEmitter() as FakeChildProcess;
+  const stdinInput: string[] = [];
+  const killSignals: NodeJS.Signals[] = [];
+  const closeOnStdinEnd = options.closeOnStdinEnd ?? true;
+  const closeOnKill = options.closeOnKill ?? true;
+
+  Object.assign(child, {
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    stdin: new Writable({
+      write(chunk, _encoding, callback) {
+        stdinInput.push(String(chunk));
+        callback();
+      },
+      final(callback) {
+        if (closeOnStdinEnd) {
+          queueMicrotask(() => child.emit('close', 0, null));
+        }
+        callback();
+      },
+    }),
+    kill(signal: NodeJS.Signals = 'SIGTERM') {
+      killSignals.push(signal);
+      if (closeOnKill) {
+        queueMicrotask(() => child.emit('close', null, signal));
+      }
+      return true;
+    },
+    killSignals,
+    stdinInput,
+  });
+
+  return child;
+}
 
 function createConfig(modelId = QWEN_CODE_DEFAULT_MODEL_ID): ModelProviderConfig {
   return {
@@ -80,10 +132,10 @@ describe('Qwen Code provider leaf', () => {
     expect(AgentCliProviderMetadataSchema.parse(providerDefinition.agentCli))
       .toEqual(providerDefinition.agentCli);
     expect(providerDefinition.agentCli.command.executable).toBe('qwen');
-    expect(providerDefinition.agentCli.command.defaultArgs).toEqual([
-      '--approval-mode',
-      'yolo',
-    ]);
+    expect(providerDefinition.agentCli.command.defaultArgs).toEqual([]);
+    expect(providerDefinition.agentCli.caveats.join('\n')).toContain(
+      'does not auto-approve Qwen Code tool use',
+    );
   });
 
   it('formats canonical gateway input into a Qwen Code prompt string', () => {
@@ -134,7 +186,7 @@ describe('Qwen Code provider leaf', () => {
     const runner = createFakeAgentCliRunner([
       (invocation) => ({
         exitCode: 0,
-        stdout: `qwen saw: ${invocation.input}`,
+        stdout: `qwen saw: ${invocation.command.args?.[1]}`,
         startedAt: 100,
         endedAt: 175,
       }),
@@ -158,7 +210,6 @@ describe('Qwen Code provider leaf', () => {
         executable: 'qwen',
         env: { NO_COLOR: '1' },
       },
-      input: 'Build the provider leaf.',
       timeoutMs: 300_000,
       metadata: {
         provider: 'qwen-code',
@@ -168,11 +219,15 @@ describe('Qwen Code provider leaf', () => {
       },
     });
     expect(runner.invocations[0]?.command.args).toEqual([
-      '--approval-mode',
-      'yolo',
+      '-p',
+      'Build the provider leaf.',
       '--model',
       'qwen3-coder-plus',
     ]);
+    expect(runner.calls[0]?.options?.environmentPolicy).toEqual({
+      mergeStrategy: 'allowlist',
+      allowlist: QWEN_CODE_DEFAULT_ENV_ALLOWLIST,
+    });
   });
 
   it('uses Qwen Code defaults without passing a synthetic default model', async () => {
@@ -190,10 +245,10 @@ describe('Qwen Code provider leaf', () => {
     });
 
     expect(runner.invocations[0]?.command.args).toEqual([
-      '--approval-mode',
-      'yolo',
+      '-p',
+      'user: Summarize this.',
     ]);
-    expect(runner.invocations[0]?.input).toBe('user: Summarize this.');
+    expect(runner.invocations[0]?.input).toBeUndefined();
   });
 
   it('preserves the one-shot qwen path for transient invocations', async () => {
@@ -215,14 +270,98 @@ describe('Qwen Code provider leaf', () => {
     });
 
     expect(runner.invocations).toHaveLength(2);
-    expect(runner.invocations[0]?.input).toBe('first transient task');
-    expect(runner.invocations[1]?.input).toBe('second transient task');
+    expect(runner.invocations[0]?.command.args).toEqual(['-p', 'first transient task']);
+    expect(runner.invocations[1]?.command.args).toEqual(['-p', 'second transient task']);
   });
 
   it('constructs a provider with the default live runner without invoking it in tests', () => {
     const provider = new QwenCodeProvider(createConfig());
 
     expect(provider.getConfig().vendor).toBe('qwen-code');
+  });
+
+  it('live runner spawns without a shell and uses the default allowlisted environment', async () => {
+    const child = createFakeChildProcess();
+    let spawnOptions: SpawnOptionsWithoutStdio | undefined;
+    const spawnProcess: QwenCodeSpawn = (_command, _args, options) => {
+      spawnOptions = options;
+      return child;
+    };
+    const runner = createQwenCodeProcessRunner({
+      baseEnv: {
+        PATH: 'C:\\tools',
+        OPENAI_API_KEY: 'qwen-auth',
+        AWS_SECRET_ACCESS_KEY: 'unrelated-secret',
+      },
+      spawn: spawnProcess,
+    });
+
+    const result = await runner.run({
+      command: {
+        executable: 'C:\\tools\\qwen.cmd',
+        args: ['-p', 'hello qwen', '--model', 'qwen3-coder-plus'],
+        env: { NO_COLOR: '1' },
+      },
+      input: 'hello qwen',
+      timeoutMs: 1_000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(spawnOptions?.shell).toBe(false);
+    expect(spawnOptions?.env).toMatchObject({
+      PATH: 'C:\\tools',
+      OPENAI_API_KEY: 'qwen-auth',
+      NO_COLOR: '1',
+    });
+    expect(spawnOptions?.env).not.toHaveProperty('AWS_SECRET_ACCESS_KEY');
+    expect(child.stdinInput.join('')).toBe('hello qwen');
+  });
+
+  it('live runner terminates and settles post-start aborts', async () => {
+    const child = createFakeChildProcess({ closeOnStdinEnd: false, closeOnKill: false });
+    const controller = new AbortController();
+    const runner = createQwenCodeProcessRunner({
+      killEscalationDelayMs: 1,
+      spawn: () => child,
+    });
+
+    const resultPromise = runner.run({
+      command: {
+        executable: 'C:\\tools\\qwen.cmd',
+        args: ['-p', 'cancel me'],
+      },
+      input: 'cancel me',
+      timeoutMs: 10_000,
+    }, { signal: controller.signal });
+
+    controller.abort();
+    const result = await resultPromise;
+
+    expect(result.ok).toBe(false);
+    expect(result.failure?.kind).toBe('spawn_error');
+    expect(child.killSignals).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+
+  it('live runner escalates timeout termination and settles if the process ignores SIGTERM', async () => {
+    const child = createFakeChildProcess({ closeOnStdinEnd: false, closeOnKill: false });
+    const runner = createQwenCodeProcessRunner({
+      killEscalationDelayMs: 1,
+      spawn: () => child,
+    });
+
+    const result = await runner.run({
+      command: {
+        executable: 'C:\\tools\\qwen.cmd',
+        args: ['-p', 'time out'],
+      },
+      input: 'time out',
+      timeoutMs: 1,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failure?.kind).toBe('timeout');
+    expect(result.failure?.timedOut).toBe(true);
+    expect(child.killSignals).toEqual(['SIGTERM', 'SIGKILL']);
   });
 
   it('selects Qwen Code executable overrides deterministically before PATH lookup', () => {

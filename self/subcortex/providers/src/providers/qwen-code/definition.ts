@@ -31,7 +31,7 @@ export const QWEN_CODE_PROVIDER_DEFINITION = {
   agentCli: {
     command: {
       executable: 'qwen',
-      defaultArgs: ['--approval-mode', 'yolo'],
+      defaultArgs: [],
     },
     install: {
       command: 'npm install -g @qwen-code/qwen-code@latest',
@@ -66,10 +66,12 @@ export const QWEN_CODE_PROVIDER_DEFINITION = {
       spawnErrorKind: 'spawn_error',
     },
     caveats: [
-      'Transient and batch execution use the one-shot `qwen --prompt` (-p) command path. Qwen Code declares `one_shot_command`, not `persistent_process`, so Cortex persistent-chat surfaces must reject it through adapter capability guardrails rather than pretending it can provide a strict long-lived chat process.',
+      'Transient and batch execution use the documented one-shot `qwen -p "<prompt>"` command path. Qwen Code declares `one_shot_command`, not `persistent_process`, so Cortex persistent-chat surfaces must reject it through adapter capability guardrails rather than pretending it can provide a strict long-lived chat process.',
       'Each invocation spawns a fresh `qwen` process with no carried session state; the provider does not retain context across requests.',
       'Live process execution shells out to the local Qwen Code CLI; tests must inject a fake runner.',
-      'The rendered prompt is piped to the `qwen` process via stdin, matching Qwen Code non-interactive (headless) behavior where `--prompt` (-p) appends to stdin input.',
+      'The catalog default is conservative and does not auto-approve Qwen Code tool use; pass explicit provider runner args only for trusted opt-in profiles.',
+      'The rendered prompt is passed to `qwen -p` for non-interactive one-shot execution; the live runner does not rely on bare stdin to enter headless mode.',
+      'The live runner uses an allowlisted environment by default for Qwen/OpenAI/DashScope auth, proxy/cert configuration, PATH, and local user config locations; full parent-environment inheritance requires an explicit runner environment policy.',
       'Set NOUS_QWEN_CODE_BIN, or QWEN_CODE_BIN, when another qwen executable shadows the desired system Qwen Code CLI on PATH; without an override the live runner prefers non-node_modules/.bin candidates when resolving qwen.',
       'The endpoint is a local placeholder because provider definitions currently require URLs.',
       'Set a concrete modelId to pass `--model`; the default model uses the Qwen Code profile/config.',
